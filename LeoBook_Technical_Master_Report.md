@@ -63,8 +63,24 @@ LeoBook is an **autonomous sports prediction and betting system** comprised of t
 
 | File | Function |
 |------|----------|
-| `Scripts/enrich_leagues.py` | League metadata + Historical data (**`--weekly` mode**) |
+| `Scripts/enrich_leagues.py` | League metadata + Historical data (**`--limit range`**, **`--season N`** support) |
 | `Scripts/recommend_bets.py` | Recommendation engine |
+
+---
+
+### 2.6 Command Line Enrichment & Range Targeting
+
+For high-velocity data ingestion, Leo.py supports granular range and season targeting:
+
+| Feature | Option | Example |
+|---------|--------|---------|
+| **Limit Range** | `--limit START-END` | `python Leo.py --enrich-leagues --limit 1-500` |
+| **Target Nth Season** | `--season N` | `python Leo.py --enrich-leagues --season 1` (Latest past season) |
+| **Cumulative Seasons** | `--seasons N` | `python Leo.py --enrich-leagues --seasons 3` (Last 3 seasons) |
+| **Weekly Sync** | `--weekly` | `python Leo.py --enrich-leagues --weekly` (Lightweight refresh) |
+
+> [!NOTE]
+> The `--limit` range syntax is 1-indexed (e.g., `501-1000` processes exactly 500 leagues starting from the 501st unprocessed item).
 
 ---
 

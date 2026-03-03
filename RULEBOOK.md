@@ -98,7 +98,15 @@ Every Python file MUST have this header format:
 ### 2.9 Timezone Consistency (Africa/Lagos)
 
 - **Rule**: Every timestamp MUST use the Nigerian timezone (**Africa/Lagos**, UTC+1).
-- **Implementation**: ALWAYS use `now_ng()` from `Core.Utils.constants`.
+- **Tooling**: Use `Core.Utils.constants.now_ng()` for all time operations.
+
+### 2.10 High-Velocity Data Ingestion (Selective Enrichment)
+
+- **Rule**: When dealing with massive datasets (>1,000 leagues), developers and agents SHOULD use **selective enrichment** via range limits and season targeting.
+- **Implementation**:
+    - Use `--limit START-END` to process specific chunks of the league list.
+    - Use `--season N` to target the most recent historical season (N=1) rather than multiple seasons at once.
+- **Reasoning**: Prevents memory exhaustion in constrained environments (e.g., Codespaces) and allows for distributed processing if multiple LeoBook instances are run in parallel.
 
 ---
 

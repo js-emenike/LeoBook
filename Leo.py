@@ -455,12 +455,15 @@ async def run_utility(args):
 
     elif args.enrich_leagues:
         print("\n  --- LEO: Flashscore League Enrichment ---")
-        limit = getattr(args, 'limit', None)
+        limit = getattr(args, '_limit_count', None)
+        offset = getattr(args, '_limit_offset', 0)
         reset = getattr(args, 'reset_leagues', False) or getattr(args, 'reset', False)
         num_seasons = getattr(args, 'seasons', 0)
         all_seasons = getattr(args, 'all_seasons', False)
-        await run_league_enricher(limit=limit, reset=reset,
-                                  num_seasons=num_seasons, all_seasons=all_seasons)
+        target_season = getattr(args, 'season', None)
+        await run_league_enricher(limit=limit, offset=offset, reset=reset,
+                                  num_seasons=num_seasons, all_seasons=all_seasons,
+                                  target_season=target_season)
 
     elif args.upgrade_crests:
         print("\n  --- LEO: Upgrade Team Crests to HQ Logos ---")

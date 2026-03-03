@@ -131,9 +131,13 @@ python Leo.py --chapter 2   # Betting automation
 python Leo.py --review      # Outcome review (Finished matches)
 python Leo.py --recommend   # Recommendations generation
 python Leo.py --streamer    # Standalone Live Multi-Tasker (Scores/Review/Reports)
-python Leo.py --enrich-leagues --weekly  # Lightweight weekly metadata sync
-python Leo.py --train-rl    # Chronological RL model training
-python Leo.py --help        # Comprehensive CLI command catalog
+python Leo.py --enrich-leagues            # Extract Flashscore league pages -> SQLite
+python Leo.py --enrich-leagues --limit 5  # Extract first 5 unprocessed leagues
+python Leo.py --enrich-leagues --limit 501-1000 # Range-based enrichment (e.g. 501-1000)
+python Leo.py --enrich-leagues --season 1 # Target ONLY the most recent past season
+python Leo.py --enrich-leagues --seasons 2 # Extract last 2 seasons per league
+python Leo.py --train-rl               # Chronological RL model training
+python Leo.py --help                    # Comprehensive CLI command catalog
 ```
 
 ---

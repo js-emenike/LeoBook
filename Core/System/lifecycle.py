@@ -158,8 +158,10 @@ Examples:
   python Leo.py --logos --limit 5           Download first 5 league logo packs
   python Leo.py --enrich-leagues            Extract Flashscore league pages -> SQLite
   python Leo.py --enrich-leagues --limit 5  Extract first 5 unprocessed leagues
+  python Leo.py --enrich-leagues --limit 501-1000  Extract leagues 501 through 1000
   python Leo.py --enrich-leagues --reset    Reset and extract all leagues
   python Leo.py --enrich-leagues --seasons 2 Extract last 2 seasons per league
+  python Leo.py --enrich-leagues --season 1  Extract only the most recent past season
   python Leo.py --enrich-leagues --all-seasons Extract all available seasons
   python Leo.py --train-rl               Train RL model from historical fixtures
   python Leo.py --train-rl --league ID   Fine-tune a specific league adapter
@@ -200,8 +202,8 @@ Examples:
                        help='Run manual metadata enrichment (gap-fill for historical data)')
     parser.add_argument('--assets', action='store_true',
                        help='Sync team and league assets (crests/logos) to Supabase Storage')
-    parser.add_argument('--limit', type=int, metavar='N',
-                       help='Limit the number of items processed (useful for testing)')
+    parser.add_argument('--limit', type=str, metavar='N or START-END',
+                       help='Limit items processed. Single number (5) or range (501-1000)')
     parser.add_argument('--logos', action='store_true',
                        help='Download football team logo packs from football-logos.cc')
     parser.add_argument('--enrich-leagues', action='store_true',
@@ -210,6 +212,8 @@ Examples:
                        help='Reset all leagues to unprocessed (use with --enrich-leagues)')
     parser.add_argument('--seasons', type=int, default=0, metavar='N',
                        help='Number of past seasons to extract (use with --enrich-leagues)')
+    parser.add_argument('--season', type=int, default=None, metavar='N',
+                       help='Target a specific Nth past season only (e.g., 1 = most recent)')
     parser.add_argument('--all-seasons', action='store_true',
                        help='Extract all available seasons (use with --enrich-leagues)')
     parser.add_argument('--upgrade-crests', action='store_true',
@@ -249,5 +253,32 @@ Examples:
         parser.error("--all requires --schedule")
     if args.league and not args.train_rl:
         parser.error("--league requires --train-rl")
+    if args.season is not None and not args.enrich_leagues:
+        parser.error("--season requires --enrich-leagues")
+
+    # Parse --limit: supports single int ("5") or range ("501-1000")
+    args._limit_offset = 0
+    args._limit_count = None
+    if args.limit:
+        if '-' in args.limit and not args.limit.startswith('-'):
+            parts = args.limit.split('-')
+            if len(parts) == 2:
+                try:
+                    start = int(parts[0])
+                    end = int(parts[1])
+                    if start < 1 or end < start:
+                        parser.error("--limit range must be START-END where START >= 1 and END >= START")
+                    args._limit_offset = start - 1  # Convert 1-indexed to 0-indexed offset
+                    args._limit_count = end - start + 1
+                except ValueError:
+                    parser.error("--limit range must be integers, e.g., 501-1000")
+            else:
+                parser.error("--limit range format: START-END (e.g., 501-1000)")
+        else:
+            try:
+                args._limit_count = int(args.limit)
+            except ValueError:
+                parser.error("--limit must be an integer or range (e.g., 5 or 501-1000)")
+
     return args
 

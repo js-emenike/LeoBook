@@ -664,12 +664,14 @@ async def extract_tab(page: Page, league_url: str, tab: str, conn,
 
 async def enrich_single_league(context, league: Dict[str, Any], conn,
                                 idx: int, total: int,
-                                num_seasons: int = 0, all_seasons: bool = False):
+                                num_seasons: int = 0, all_seasons: bool = False,
+                                target_season: Optional[int] = None):
     """Process a single league: region + crest + season + fixtures + results.
 
     Args:
         num_seasons: Number of past seasons to extract (0 = current only)
         all_seasons: If True, extract ALL available seasons from archive
+        target_season: If set, extract ONLY the Nth most recent past season (1-indexed)
     """
     league_id = league["league_id"]
     name = league["name"]
@@ -783,10 +785,18 @@ async def enrich_single_league(context, league: Dict[str, Any], conn,
         total_matches = fixtures_count + results_count
 
         # ── Historical seasons (if requested) ────────────────────────────
-        if num_seasons > 0 or all_seasons:
+        if num_seasons > 0 or all_seasons or target_season is not None:
             archive_seasons = await get_archive_seasons(page, url)
 
-            if num_seasons > 0:
+            if target_season is not None:
+                # Target a specific Nth season (1-indexed)
+                if target_season <= len(archive_seasons):
+                    archive_seasons = [archive_seasons[target_season - 1]]
+                    print(f"    [Season Target] Picking season #{target_season}: {archive_seasons[0].get('slug', '')}")
+                else:
+                    print(f"    [Season Target] Season #{target_season} not available (only {len(archive_seasons)} found)")
+                    archive_seasons = []
+            elif num_seasons > 0:
                 # Take the last N most recent seasons (skip current which we already did)
                 archive_seasons = archive_seasons[:num_seasons]
 
@@ -833,14 +843,17 @@ async def enrich_single_league(context, league: Dict[str, Any], conn,
 #  Main entry point
 # ═══════════════════════════════════════════════════════════════════════════════
 
-async def main(limit: Optional[int] = None, reset: bool = False,
+async def main(limit: Optional[int] = None, offset: int = 0, reset: bool = False,
                num_seasons: int = 0, all_seasons: bool = False,
-               weekly: bool = False):
+               weekly: bool = False, target_season: Optional[int] = None):
     """Main enrichment entry point.
 
     Args:
+        limit: Max number of leagues to process (after offset)
+        offset: Number of leagues to skip from the start (0-indexed)
         weekly: If True, lightweight mode — MAX_SHOW_MORE=2, skip image downloads
                 (unless team/league has no crest). Used by weekly scheduler.
+        target_season: If set, extract ONLY the Nth most recent past season (1-indexed)
     """
     global MAX_SHOW_MORE
     if weekly:
@@ -864,22 +877,31 @@ async def main(limit: Optional[int] = None, reset: bool = False,
 
     # ── Get unprocessed leagues ──────────────────────────────────────────
     leagues = get_unprocessed_leagues(conn)
+    # Apply offset first, then limit
+    if offset > 0:
+        leagues = leagues[offset:]
     if limit:
         leagues = leagues[:limit]
 
     if not leagues:
-        print("\n  [Done] All leagues have been processed. Use --reset to reprocess.")
+        if offset > 0:
+            print(f"\n  [Done] No leagues in range (offset={offset}, limit={limit}). Check total league count.")
+        else:
+            print("\n  [Done] All leagues have been processed. Use --reset to reprocess.")
         return
 
     total = len(leagues)
     mode_label = "current season"
     if weekly:
         mode_label = "WEEKLY refresh (light)"
+    elif target_season is not None:
+        mode_label = f"season #{target_season} only"
     elif all_seasons:
         mode_label = "ALL seasons"
     elif num_seasons > 0:
         mode_label = f"last {num_seasons} seasons"
-    print(f"\n  [Enrich] {total} leagues to process ({mode_label}, concurrency={MAX_CONCURRENCY})")
+    range_label = f", range {offset+1}-{offset+total}" if offset > 0 else ""
+    print(f"\n  [Enrich] {total} leagues to process ({mode_label}{range_label}, concurrency={MAX_CONCURRENCY})")
 
     # ── Ensure crest directories exist (from project root) ───────────────
     os.makedirs(os.path.join(BASE_DIR, LEAGUE_CRESTS_DIR), exist_ok=True)
@@ -919,6 +941,7 @@ async def main(limit: Optional[int] = None, reset: bool = False,
                     await enrich_single_league(
                         context, league, worker_conn, idx, total,
                         num_seasons=num_seasons, all_seasons=all_seasons,
+                        target_season=target_season,
                     )
             finally:
                 worker_conn.close()
@@ -970,13 +993,36 @@ async def main(limit: Optional[int] = None, reset: bool = False,
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Enrich Flashscore leagues -> SQLite")
-    parser.add_argument("--limit", type=int, default=None, help="Limit number of leagues to process")
+    parser.add_argument("--limit", type=str, default=None, help="Limit items processed. Single number (5) or range (501-1000)")
     parser.add_argument("--reset", action="store_true", help="Reset all leagues to unprocessed")
     parser.add_argument("--seasons", type=int, default=0, help="Number of past seasons to extract (last N)")
+    parser.add_argument("--season", type=int, default=None, help="Target a specific Nth past season only (e.g., 1 = most recent)")
     parser.add_argument("--all-seasons", action="store_true", help="Extract all available seasons")
     parser.add_argument("--weekly", action="store_true", help="Weekly light refresh (MAX_SHOW_MORE=2, skip images)")
     args = parser.parse_args()
 
-    asyncio.run(main(limit=args.limit, reset=args.reset,
+    # Parse --limit: supports single int ("5") or range ("501-1000")
+    limit_count = None
+    offset = 0
+    if args.limit:
+        if '-' in args.limit:
+            parts = args.limit.split('-')
+            if len(parts) == 2:
+                try:
+                    start = int(parts[0])
+                    end = int(parts[1])
+                    offset = start - 1
+                    limit_count = end - start + 1
+                except ValueError:
+                    print("Error: --limit range must be integers, e.g., 501-1000")
+                    sys.exit(1)
+        else:
+            try:
+                limit_count = int(args.limit)
+            except ValueError:
+                print("Error: --limit must be an integer or range (e.g., 5 or 501-1000)")
+                sys.exit(1)
+
+    asyncio.run(main(limit=limit_count, offset=offset, reset=args.reset,
                      num_seasons=args.seasons, all_seasons=args.all_seasons,
-                     weekly=args.weekly))
+                     weekly=args.weekly, target_season=args.season))

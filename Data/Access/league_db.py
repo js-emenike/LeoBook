@@ -10,6 +10,7 @@ import json
 import os
 from datetime import datetime
 from typing import Optional, List, Dict, Any
+from Core.Utils.constants import now_ng
 
 DB_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Store")
 DB_PATH = os.path.join(DB_DIR, "leobook.db")
@@ -33,6 +34,7 @@ _SCHEMA_SQL = """
     CREATE TABLE IF NOT EXISTS leagues (
         id                  INTEGER PRIMARY KEY AUTOINCREMENT,
         league_id           TEXT UNIQUE NOT NULL,
+        fs_league_id        TEXT,
         country_code        TEXT,
         continent           TEXT,
         name                TEXT NOT NULL,
@@ -73,10 +75,10 @@ _SCHEMA_SQL = """
         fixture_id          TEXT UNIQUE,
         date                TEXT,
         time                TEXT,
-        league_id           INTEGER REFERENCES leagues(id),
-        home_team_id        INTEGER REFERENCES teams(id),
+        league_id           TEXT,
+        home_team_id        TEXT,
         home_team_name      TEXT,
-        away_team_id        INTEGER REFERENCES teams(id),
+        away_team_id        TEXT,
         away_team_name      TEXT,
         home_score          INTEGER,
         away_score          INTEGER,
@@ -276,6 +278,7 @@ _ALTER_MIGRATIONS = [
     ("leagues", "abbreviations", "TEXT"),
     ("leagues", "search_terms", "TEXT"),
     ("leagues", "date_updated", "TEXT"),
+    ("leagues", "fs_league_id", "TEXT"),
     ("teams", "team_id", "TEXT"),
     ("teams", "country", "TEXT"),
     ("teams", "city", "TEXT"),
@@ -423,15 +426,16 @@ def init_db(conn: Optional[sqlite3.Connection] = None) -> sqlite3.Connection:
 
 def upsert_league(conn: sqlite3.Connection, data: Dict[str, Any]) -> int:
     """Insert or update a league. Returns the row id."""
-    now = datetime.now().isoformat()
+    now = now_ng().isoformat()
     cur = conn.execute(
-        """INSERT INTO leagues (league_id, country_code, continent, name, crest,
+        """INSERT INTO leagues (league_id, fs_league_id, country_code, continent, name, crest,
                current_season, url, region, region_flag, region_url,
                other_names, abbreviations, search_terms, date_updated, last_updated)
-           VALUES (:league_id, :country_code, :continent, :name, :crest,
+           VALUES (:league_id, :fs_league_id, :country_code, :continent, :name, :crest,
                :current_season, :url, :region, :region_flag, :region_url,
                :other_names, :abbreviations, :search_terms, :date_updated, :last_updated)
            ON CONFLICT(league_id) DO UPDATE SET
+               fs_league_id   = COALESCE(excluded.fs_league_id, leagues.fs_league_id),
                country_code   = COALESCE(excluded.country_code, leagues.country_code),
                continent      = COALESCE(excluded.continent, leagues.continent),
                name           = COALESCE(excluded.name, leagues.name),
@@ -449,6 +453,7 @@ def upsert_league(conn: sqlite3.Connection, data: Dict[str, Any]) -> int:
         """,
         {
             "league_id": data["league_id"],
+            "fs_league_id": data.get("fs_league_id"),
             "country_code": data.get("country_code"),
             "continent": data.get("continent"),
             "name": data.get("name", data.get("league", "")),
@@ -479,7 +484,7 @@ def mark_league_processed(conn: sqlite3.Connection, league_id: str):
     """Flag a league as fully enriched."""
     conn.execute(
         "UPDATE leagues SET processed = 1, last_updated = ? WHERE league_id = ?",
-        (datetime.now().isoformat(), league_id),
+        (now_ng().isoformat(), league_id),
     )
     conn.commit()
 
@@ -498,7 +503,7 @@ def get_unprocessed_leagues(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
 
 def upsert_team(conn: sqlite3.Connection, data: Dict[str, Any]) -> int:
     """Insert or update a team by team_id. Returns the row id."""
-    now = datetime.now().isoformat()
+    now = now_ng().isoformat()
     league_ids_json = json.dumps(data.get("league_ids", []))
     team_id = data.get("team_id")
 
@@ -580,7 +585,7 @@ def get_team_id(conn: sqlite3.Connection, name: str, country_code: str = None) -
 
 def upsert_fixture(conn: sqlite3.Connection, data: Dict[str, Any]) -> int:
     """Insert or update a fixture. Returns the row id."""
-    now = datetime.now().isoformat()
+    now = now_ng().isoformat()
     extra_json = json.dumps(data.get("extra")) if data.get("extra") else None
     fixture_id = data.get("fixture_id", "")
 
@@ -640,7 +645,7 @@ def upsert_fixture(conn: sqlite3.Connection, data: Dict[str, Any]) -> int:
 
 def bulk_upsert_fixtures(conn: sqlite3.Connection, fixtures: List[Dict[str, Any]]):
     """Batch insert/update fixtures for performance."""
-    now = datetime.now().isoformat()
+    now = now_ng().isoformat()
     rows = []
     for f in fixtures:
         extra_json = json.dumps(f.get("extra")) if f.get("extra") else None
@@ -687,7 +692,7 @@ def bulk_upsert_fixtures(conn: sqlite3.Connection, fixtures: List[Dict[str, Any]
 
 def upsert_prediction(conn: sqlite3.Connection, data: Dict[str, Any]):
     """Insert or update a prediction row."""
-    now = datetime.now().isoformat()
+    now = now_ng().isoformat()
     # Normalize over_2.5 → over_2_5
     if "over_2.5" in data:
         data["over_2_5"] = data.pop("over_2.5")
@@ -738,7 +743,7 @@ def get_predictions(conn: sqlite3.Connection, status: str = None) -> List[Dict[s
 
 def update_prediction(conn: sqlite3.Connection, fixture_id: str, updates: Dict[str, Any]):
     """Update specific fields on a prediction."""
-    now = datetime.now().isoformat()
+    now = now_ng().isoformat()
     updates["last_updated"] = now
     set_clause = ", ".join([f"{k} = :{k}" for k in updates.keys()])
     updates["fixture_id"] = fixture_id
@@ -752,7 +757,7 @@ def update_prediction(conn: sqlite3.Connection, fixture_id: str, updates: Dict[s
 
 def upsert_standing(conn: sqlite3.Connection, data: Dict[str, Any]):
     """Insert or update a standings row."""
-    now = datetime.now().isoformat()
+    now = now_ng().isoformat()
     conn.execute(
         """INSERT INTO standings (standings_key, league_id, team_id, team_name,
                position, played, wins, draws, losses,
@@ -813,7 +818,7 @@ def get_standings(conn: sqlite3.Connection, region_league: str = None) -> List[D
 
 def log_audit_event(conn: sqlite3.Connection, data: Dict[str, Any]):
     """Insert an audit log entry."""
-    now = datetime.now().isoformat()
+    now = now_ng().isoformat()
     conn.execute(
         """INSERT INTO audit_log (id, timestamp, event_type, description,
                balance_before, balance_after, stake, status, last_updated)
@@ -841,7 +846,7 @@ def log_audit_event(conn: sqlite3.Connection, data: Dict[str, Any]):
 
 def upsert_live_score(conn: sqlite3.Connection, data: Dict[str, Any]):
     """Insert or update a live score entry."""
-    now = datetime.now().isoformat()
+    now = now_ng().isoformat()
     conn.execute(
         """INSERT INTO live_scores (fixture_id, home_team, away_team,
                home_score, away_score, minute, status,
@@ -880,7 +885,7 @@ def upsert_live_score(conn: sqlite3.Connection, data: Dict[str, Any]):
 
 def upsert_fb_match(conn: sqlite3.Connection, data: Dict[str, Any]):
     """Insert or update an fb_matches entry."""
-    now = datetime.now().isoformat()
+    now = now_ng().isoformat()
     conn.execute(
         """INSERT INTO fb_matches (site_match_id, date, time, home_team, away_team,
                league, url, last_extracted, fixture_id, matched, odds,
@@ -928,7 +933,7 @@ def upsert_fb_match(conn: sqlite3.Connection, data: Dict[str, Any]):
 
 def upsert_country(conn: sqlite3.Connection, data: Dict[str, Any]):
     """Insert or update a country entry."""
-    now = datetime.now().isoformat()
+    now = now_ng().isoformat()
     conn.execute(
         """INSERT INTO countries (code, name, continent, capital, flag_1x1, flag_4x3, last_updated)
            VALUES (:code, :name, :continent, :capital, :flag_1x1, :flag_4x3, :last_updated)
@@ -959,7 +964,7 @@ def upsert_country(conn: sqlite3.Connection, data: Dict[str, Any]):
 
 def upsert_accuracy_report(conn: sqlite3.Connection, data: Dict[str, Any]):
     """Insert or update an accuracy report."""
-    now = datetime.now().isoformat()
+    now = now_ng().isoformat()
     conn.execute(
         """INSERT INTO accuracy_reports (report_id, timestamp, volume, win_rate,
                return_pct, period, last_updated)

@@ -2,9 +2,11 @@
 # Part of LeoBook Scripts — Data Collection
 #
 # Usage:
-#   python -m Scripts.enrich_leagues              # All leagues
+#   python -m Scripts.enrich_leagues              # All leagues (current season)
 #   python -m Scripts.enrich_leagues --limit 5    # First 5 unprocessed
 #   python -m Scripts.enrich_leagues --reset      # Reset processed flags
+#   python -m Scripts.enrich_leagues --seasons 2  # Last 2 seasons per league
+#   python -m Scripts.enrich_leagues --all-seasons # All available seasons
 #
 # Reads Data/Store/leagues.json -> populates leagues/teams/fixtures tables
 # Downloads crests concurrently via ThreadPoolExecutor
@@ -17,7 +19,7 @@ import re
 import sys
 import traceback
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, date
 from typing import List, Dict, Any, Optional
 
 import requests
@@ -26,6 +28,8 @@ from playwright.async_api import async_playwright, Page
 # ── Project imports ──────────────────────────────────────────────────────────
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from Core.Utils.constants import now_ng
+from Core.Intelligence.aigo_suite import AIGOSuite
 from Data.Access.league_db import (
     init_db, get_connection, upsert_league, upsert_team, upsert_fixture,
     bulk_upsert_fixtures, mark_league_processed, get_unprocessed_leagues,
@@ -33,10 +37,10 @@ from Data.Access.league_db import (
 )
 from Core.Browser.site_helpers import fs_universal_popup_dismissal
 
-# ── Paths ────────────────────────────────────────────────────────────────────
+# ── Paths (RELATIVE from project root) ───────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LEAGUES_JSON = os.path.join(BASE_DIR, "Data", "Store", "leagues.json")
-CRESTS_DIR = os.path.join(BASE_DIR, "Data", "Store", "crests")
+CRESTS_DIR = os.path.join("Data", "Store", "crests")
 LEAGUE_CRESTS_DIR = os.path.join(CRESTS_DIR, "leagues")
 TEAM_CRESTS_DIR = os.path.join(CRESTS_DIR, "teams")
 
@@ -58,20 +62,22 @@ def _download_image(url: str, dest_path: str) -> str:
     """Download an image to disk. Returns the local path or empty string on failure."""
     if not url or url.startswith("data:"):
         return ""
-    if os.path.exists(dest_path):
-        return dest_path
+    # Resolve relative path from BASE_DIR for actual disk I/O
+    abs_dest = os.path.join(BASE_DIR, dest_path) if not os.path.isabs(dest_path) else dest_path
+    if os.path.exists(abs_dest):
+        return dest_path  # Return the relative path
     try:
-        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+        os.makedirs(os.path.dirname(abs_dest), exist_ok=True)
         resp = requests.get(url, timeout=REQUEST_TIMEOUT, headers={
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0",
             "Referer": "https://www.flashscore.com/",
         })
         if resp.status_code == 200 and len(resp.content) > 100:
-            with open(dest_path, "wb") as f:
+            with open(abs_dest, "wb") as f:
                 f.write(resp.content)
-            return dest_path
-    except Exception as e:
-        pass  # Silently skip failed downloads
+            return dest_path  # Return the relative path
+    except Exception:
+        pass
     return ""
 
 
@@ -113,55 +119,88 @@ def seed_leagues_from_json(conn):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  Step 2-7: Extract a single league page
+#  JS Extraction Scripts
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# ── JS to extract all match data from the page ──────────────────────────────
-EXTRACT_MATCHES_JS = r"""() => {
+# ── JS to extract all match data with smart year detection + team IDs ────────
+# seasonContext is passed from Python: {startYear, endYear, isSplitSeason, tab}
+EXTRACT_MATCHES_JS = r"""(seasonCtx) => {
     const matches = [];
-    const currentYear = new Date().getFullYear();
 
-    // Walk ALL sibling elements in the event list to track round context
-    // Elements appear in order: round headers, then match rows, then more rounds, etc.
+    // Season-aware year inference
+    const startYear = seasonCtx.startYear || new Date().getFullYear();
+    const endYear = seasonCtx.endYear || startYear;
+    const isSplitSeason = seasonCtx.isSplitSeason || false;
+    const tab = seasonCtx.tab || 'results';  // 'fixtures' or 'results'
+    const today = new Date();
+
+    function inferYear(day, month) {
+        if (!isSplitSeason) {
+            // Calendar-year league: all dates belong to the single year
+            return startYear;
+        }
+        // Split season (e.g. 2023-2024): Aug-Dec -> startYear, Jan-Jul -> endYear
+        if (month >= 7) {  // July onwards -> first year (pre-season starts July/Aug)
+            return startYear;
+        } else {
+            return endYear;
+        }
+    }
+
+    // Walk ALL sibling elements in the event list
     const container = document.querySelector('.sportName, .leagues--static, [class*="event__"]')?.parentElement
         || document.body;
-
-    // Gather all relevant elements in DOM order
-    const allEls = container.querySelectorAll(
-        '.event__round, [id^="g_1_"]'
-    );
-
+    const allEls = container.querySelectorAll('.event__round, [id^="g_1_"]');
     let currentRound = '';
 
     allEls.forEach(el => {
-        // Track round headers
         if (el.classList.contains('event__round')) {
             currentRound = el.innerText.trim();
             return;
         }
-
-        // Must be a match row
         if (!el.id || !el.id.startsWith('g_1_')) return;
 
         const row = el;
         const fixtureId = row.id.replace('g_1_', '');
 
-        // ── Time + Date (desktop format: "DD.MM. HH:MM" or "DD.MM.YYYY HH:MM") ──
+        // ── Time + Date ──
         const timeEl = row.querySelector('.event__time');
         let matchTime = '';
         let matchDate = '';
+        let extraTag = '';
+
         if (timeEl) {
-            const raw = timeEl.innerText.trim();
-            // Try DD.MM.YYYY HH:MM first
+            // Check for FRO or Postp sub-elements
+            const stageInTime = timeEl.querySelector('.event__stage--block, .event__stage--pkv, .event__stage');
+            if (stageInTime) {
+                extraTag = stageInTime.innerText.trim();
+            }
+
+            // Get the raw text without sub-element text
+            let raw = '';
+            for (const node of timeEl.childNodes) {
+                if (node.nodeType === 3) {  // Text node
+                    raw += node.textContent;
+                } else if (node.classList && node.classList.contains('lineThrough')) {
+                    raw += node.textContent;
+                }
+            }
+            raw = raw.trim();
+            if (!raw) raw = timeEl.innerText.trim().replace(/FRO|Postp\.?|Canc\.?|Abn\.?/gi, '').trim();
+
+            // Try DD.MM.YYYY HH:MM (full year)
             const fullMatch = raw.match(/(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2})/);
             if (fullMatch) {
                 matchDate = `${fullMatch[3]}-${fullMatch[2]}-${fullMatch[1]}`;
                 matchTime = `${fullMatch[4]}:${fullMatch[5]}`;
             } else {
-                // Try DD.MM. HH:MM (no year)
+                // Try DD.MM. HH:MM (no year — use smart detection)
                 const shortMatch = raw.match(/(\d{2})\.(\d{2})\.\s*(\d{2}):(\d{2})/);
                 if (shortMatch) {
-                    matchDate = `${currentYear}-${shortMatch[2]}-${shortMatch[1]}`;
+                    const day = parseInt(shortMatch[1]);
+                    const month = parseInt(shortMatch[2]);
+                    const year = inferYear(day, month);
+                    matchDate = `${year}-${shortMatch[2]}-${shortMatch[1]}`;
                     matchTime = `${shortMatch[3]}:${shortMatch[4]}`;
                 } else {
                     // Just time HH:MM
@@ -171,13 +210,11 @@ EXTRACT_MATCHES_JS = r"""() => {
             }
         }
 
-        // ── Home team ──
+        // ── Home & Away teams ──
         const homeEl = row.querySelector('.event__homeParticipant');
         const homeName = homeEl ?
             (homeEl.querySelector('[class*="wcl-name"], .event__participant--name') || homeEl)
                 .innerText.trim().replace(/\s*\(.*?\)\s*$/, '') : '';
-
-        // ── Away team ──
         const awayEl = row.querySelector('.event__awayParticipant');
         const awayName = awayEl ?
             (awayEl.querySelector('[class*="wcl-name"], .event__participant--name') || awayEl)
@@ -192,30 +229,42 @@ EXTRACT_MATCHES_JS = r"""() => {
         const awayScore = awayScoreText && awayScoreText !== '-' ? parseInt(awayScoreText) : null;
 
         // ── Match status ──
-        // Desktop: finished matches have data-state="final" or class wcl-isFinal on score
-        // Live/special: .event__stage--block or .event__stage contains "75'", "HT", "Postp." etc.
         let matchStatus = '';
         const stageEl = row.querySelector('.event__stage--block, .event__stage');
-        if (stageEl) {
+        if (stageEl && !stageEl.closest('.event__time')) {
             matchStatus = stageEl.innerText.trim();
         } else if (homeScoreEl) {
-            // Check data-state or isFinal class
             const state = homeScoreEl.getAttribute('data-state') || '';
             const isFinal = homeScoreEl.className.includes('isFinal') ||
                             homeScoreEl.className.includes('Final');
-            if (state === 'final' || isFinal) {
-                matchStatus = 'FT';
-            } else if (homeScore !== null) {
-                matchStatus = 'FT';  // Has score = finished
-            }
+            if (state === 'final' || isFinal) matchStatus = 'FT';
+            else if (homeScore !== null) matchStatus = 'FT';
         }
 
         // ── Team crests ──
-        // Desktop: logos are separate elements, not inside participant containers
         const homeImg = row.querySelector('.event__logo--home img, .event__homeParticipant img');
         const awayImg = row.querySelector('.event__logo--away img, .event__awayParticipant img');
         const homeCrest = homeImg ? (homeImg.src || homeImg.getAttribute('data-src') || '') : '';
         const awayCrest = awayImg ? (awayImg.src || awayImg.getAttribute('data-src') || '') : '';
+
+        // ── Team ID + URL from match link ──
+        let homeTeamId = '', awayTeamId = '', homeTeamUrl = '', awayTeamUrl = '';
+        const linkEl = row.querySelector('a[href*="/match/"]');
+        const mLink = linkEl ? linkEl.getAttribute('href') : '';
+        if (mLink && mLink.includes('/match/football/')) {
+            const cleanPath = mLink.replace(/^(.*\/match\/football\/)/, '');
+            const parts = cleanPath.split('/').filter(p => p && !p.startsWith('?'));
+            if (parts.length >= 2) {
+                const hSeg = parts[0]; const aSeg = parts[1];
+                const hSlug = hSeg.substring(0, hSeg.lastIndexOf('-'));
+                homeTeamId = hSeg.substring(hSeg.lastIndexOf('-') + 1);
+                const aSlug = aSeg.substring(0, aSeg.lastIndexOf('-'));
+                awayTeamId = aSeg.substring(aSeg.lastIndexOf('-') + 1);
+
+                if (hSlug && homeTeamId) homeTeamUrl = `https://www.flashscore.com/team/${hSlug}/${homeTeamId}/`;
+                if (aSlug && awayTeamId) awayTeamUrl = `https://www.flashscore.com/team/${aSlug}/${awayTeamId}/`;
+            }
+        }
 
         matches.push({
             fixture_id: fixtureId,
@@ -223,12 +272,17 @@ EXTRACT_MATCHES_JS = r"""() => {
             time: matchTime,
             home_team_name: homeName,
             away_team_name: awayName,
+            home_team_id: homeTeamId,
+            away_team_id: awayTeamId,
+            home_team_url: homeTeamUrl,
+            away_team_url: awayTeamUrl,
             home_score: homeScore,
             away_score: awayScore,
             match_status: matchStatus,
             home_crest_url: homeCrest,
             away_crest_url: awayCrest,
             league_stage: currentRound,
+            extra: extraTag || null,
             url: `/match/${fixtureId}/#/match-summary`
         });
     });
@@ -238,7 +292,6 @@ EXTRACT_MATCHES_JS = r"""() => {
 
 # ── JS to extract season text ───────────────────────────────────────────────
 EXTRACT_SEASON_JS = r"""() => {
-    // Try multiple selectors for the season/competition header
     const selectors = [
         '.heading__info',
         '.heading__title--desc',
@@ -249,12 +302,10 @@ EXTRACT_SEASON_JS = r"""() => {
         const el = document.querySelector(sel);
         if (el) {
             const text = el.innerText.trim();
-            // Look for year patterns like 2024/2025 or 2025
             const match = text.match(/(\d{4}(?:\/\d{4})?)/);
             if (match) return match[1];
         }
     }
-    // Fallback: check breadcrumbs
     const breadcrumbs = document.querySelectorAll('.breadcrumb__text');
     for (const b of breadcrumbs) {
         const match = b.innerText.match(/(\d{4}(?:\/\d{4})?)/);
@@ -269,7 +320,133 @@ EXTRACT_CREST_JS = r"""() => {
     return img ? (img.src || img.getAttribute('data-src') || '') : '';
 }"""
 
+# ── JS to extract fs_league_id from URL hash ────────────────────────────────
+EXTRACT_FS_LEAGUE_ID_JS = r"""() => {
+    // The URL hash contains the fs_league_id, e.g. /#/OEEq9Yvp/standings/overall/
+    const hash = window.location.hash || '';
+    const match = hash.match(/#\/([A-Za-z0-9]{6,10})\//);
+    if (match) return match[1];
+    // Fallback: check internal navigation links
+    const navLinks = document.querySelectorAll('a[href*="/#/"]');
+    for (const link of navLinks) {
+        const href = link.getAttribute('href') || '';
+        const m = href.match(/#\/([A-Za-z0-9]{6,10})\//);
+        if (m) return m[1];
+    }
+    return '';
+}"""
 
+# ── JS to extract archive season links ──────────────────────────────────────
+EXTRACT_ARCHIVE_JS = r"""() => {
+    const seasons = [];
+    const links = document.querySelectorAll('a[href*="/results/"], a[href*="/fixtures/"], .archive__row a, .archive__season a');
+    const seen = new Set();
+    for (const a of links) {
+        const href = a.getAttribute('href') || '';
+        // Match patterns like /football/england/premier-league-2023-2024/
+        const match = href.match(/\/football\/([^/]+)\/([^/]+-(\d{4})-(\d{4}))\/?/);
+        if (match && !seen.has(match[2])) {
+            seen.add(match[2]);
+            seasons.push({
+                slug: match[2],
+                country: match[1],
+                start_year: parseInt(match[3]),
+                end_year: parseInt(match[4]),
+                url: href.startsWith('http') ? href : 'https://www.flashscore.com' + href
+            });
+        }
+        // Calendar-year seasons like /premier-league-2024/
+        const calMatch = href.match(/\/football\/([^/]+)\/([^/]+-(\d{4}))\/?$/);
+        if (calMatch && !seen.has(calMatch[2])) {
+            seen.add(calMatch[2]);
+            seasons.push({
+                slug: calMatch[2],
+                country: calMatch[1],
+                start_year: parseInt(calMatch[3]),
+                end_year: parseInt(calMatch[3]),
+                url: href.startsWith('http') ? href : 'https://www.flashscore.com' + href
+            });
+        }
+    }
+    // Also check the archive table rows
+    const tableLinks = document.querySelectorAll('.archive__row a, .archive__text a, td a[href*="/football/"]');
+    for (const a of tableLinks) {
+        const href = a.getAttribute('href') || '';
+        const m = href.match(/\/football\/([^/]+)\/([^/]+-(\d{4})-(\d{4}))\/?/);
+        if (m && !seen.has(m[2])) {
+            seen.add(m[2]);
+            seasons.push({
+                slug: m[2], country: m[1],
+                start_year: parseInt(m[3]), end_year: parseInt(m[4]),
+                url: href.startsWith('http') ? href : 'https://www.flashscore.com' + href
+            });
+        }
+        const cm = href.match(/\/football\/([^/]+)\/([^/]+-(\d{4}))\/?$/);
+        if (cm && !seen.has(cm[2])) {
+            seen.add(cm[2]);
+            seasons.push({
+                slug: cm[2], country: cm[1],
+                start_year: parseInt(cm[3]), end_year: parseInt(cm[3]),
+                url: href.startsWith('http') ? href : 'https://www.flashscore.com' + href
+            });
+        }
+    }
+    // Sort by start_year descending (most recent first)
+    seasons.sort((a, b) => b.start_year - a.start_year);
+    return seasons;
+}"""
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Season Helpers
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def parse_season_string(season_str: str) -> dict:
+    """Parse a season string like '2024/2025' or '2024' into context."""
+    if not season_str:
+        year = now_ng().year
+        return {"startYear": year, "endYear": year, "isSplitSeason": False}
+
+    # Try split season: 2023/2024
+    m = re.match(r"(\d{4})[/\-](\d{4})", season_str)
+    if m:
+        return {
+            "startYear": int(m.group(1)),
+            "endYear": int(m.group(2)),
+            "isSplitSeason": True,
+        }
+    # Calendar year: 2024
+    m = re.match(r"(\d{4})", season_str)
+    if m:
+        year = int(m.group(1))
+        return {"startYear": year, "endYear": year, "isSplitSeason": False}
+
+    year = datetime.now().year
+    return {"startYear": year, "endYear": year, "isSplitSeason": False}
+
+
+@AIGOSuite.aigo_retry(max_retries=2, delay=3.0)
+async def get_archive_seasons(page: Page, league_url: str) -> List[Dict]:
+    """Navigate to the archive page and extract all available seasons."""
+    archive_url = league_url.rstrip("/") + "/archive/"
+    print(f"    [Archive] Navigating to {archive_url}")
+    try:
+        await page.goto(archive_url, wait_until="domcontentloaded", timeout=60000)
+        await asyncio.sleep(3)
+        await fs_universal_popup_dismissal(page)
+        seasons = await page.evaluate(EXTRACT_ARCHIVE_JS)
+        print(f"    [Archive] Found {len(seasons)} historical seasons")
+        return seasons or []
+    except Exception as e:
+        print(f"    [Archive] Failed: {e}")
+        return []
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Core Extraction
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@AIGOSuite.aigo_retry(max_retries=2, delay=2.0)
 async def _expand_show_more(page: Page, max_clicks: int = MAX_SHOW_MORE):
     """Click 'Show more matches' exhaustively."""
     clicks = 0
@@ -288,9 +465,14 @@ async def _expand_show_more(page: Page, max_clicks: int = MAX_SHOW_MORE):
         print(f"      [Expand] Clicked 'Show more' {clicks} times")
 
 
-async def extract_tab(page: Page, league_url: str, tab: str, conn, league_db_id: int,
-                     season: str, country_code: str) -> int:
-    """Navigate to a league tab (fixtures or results), expand, extract, and save matches."""
+@AIGOSuite.aigo_retry(max_retries=2, delay=3.0)
+async def extract_tab(page: Page, league_url: str, tab: str, conn,
+                     league_id: str, season: str, country_code: str) -> int:
+    """Navigate to a league tab (fixtures or results), expand, extract, and save matches.
+
+    Args:
+        league_id: Flashscore league_id string (NOT SQLite auto-increment).
+    """
     url = league_url.rstrip("/") + f"/{tab}/"
     print(f"    [{tab.upper()}] Navigating to {url}")
 
@@ -305,9 +487,13 @@ async def extract_tab(page: Page, league_url: str, tab: str, conn, league_db_id:
     # Expand all matches
     await _expand_show_more(page)
 
-    # Extract match data
+    # Build season context for smart year detection
+    season_ctx = parse_season_string(season)
+    season_ctx["tab"] = tab
+
+    # Extract match data with season context
     try:
-        matches_raw = await page.evaluate(EXTRACT_MATCHES_JS)
+        matches_raw = await page.evaluate(EXTRACT_MATCHES_JS, season_ctx)
     except Exception as e:
         print(f"    [{tab.upper()}] Extraction failed: {e}")
         return 0
@@ -316,9 +502,10 @@ async def extract_tab(page: Page, league_url: str, tab: str, conn, league_db_id:
         print(f"    [{tab.upper()}] No matches found")
         return 0
 
-    # Process matches: schedule image downloads + build fixture rows
+    # Process matches
     fixture_rows = []
     crest_futures = []
+    today = date.today()
 
     for m in matches_raw:
         home_name = m.get("home_team_name", "")
@@ -326,75 +513,116 @@ async def extract_tab(page: Page, league_url: str, tab: str, conn, league_db_id:
         if not home_name or not away_name:
             continue
 
-        # Upsert teams
-        home_team_id = None
-        away_team_id = None
+        # Use Flashscore team IDs from match link
+        home_team_id = m.get("home_team_id", "")
+        away_team_id = m.get("away_team_id", "")
+        home_team_url = m.get("home_team_url", "")
+        away_team_url = m.get("away_team_url", "")
+
+        # Upsert teams with Flashscore team_id and URL
         if home_name:
-            upsert_team(conn, {
+            team_data = {
                 "name": home_name,
                 "country_code": country_code,
-                "league_ids": [league_db_id],
-            })
-            home_team_id = get_team_id(conn, home_name, country_code)
+                "league_ids": [league_id],
+            }
+            if home_team_id:
+                team_data["team_id"] = home_team_id
+            if home_team_url:
+                team_data["url"] = home_team_url
+            upsert_team(conn, team_data)
 
         if away_name:
-            upsert_team(conn, {
+            team_data = {
                 "name": away_name,
                 "country_code": country_code,
-                "league_ids": [league_db_id],
-            })
-            away_team_id = get_team_id(conn, away_name, country_code)
+                "league_ids": [league_id],
+            }
+            if away_team_id:
+                team_data["team_id"] = away_team_id
+            if away_team_url:
+                team_data["url"] = away_team_url
+            upsert_team(conn, team_data)
 
-        # Schedule team crest downloads
+        # Schedule team crest downloads (relative paths)
         home_crest_url = m.get("home_crest_url", "")
         away_crest_url = m.get("away_crest_url", "")
         home_crest_path = ""
         away_crest_path = ""
 
         if home_crest_url and not home_crest_url.startswith("data:"):
-            ext = ".png"
-            dest = os.path.join(TEAM_CRESTS_DIR, f"{_slugify(home_name)}{ext}")
+            dest = os.path.join(TEAM_CRESTS_DIR, f"{_slugify(home_name)}.png")
             crest_futures.append((schedule_image_download(home_crest_url, dest), "home", home_name, dest))
             home_crest_path = dest
 
         if away_crest_url and not away_crest_url.startswith("data:"):
-            ext = ".png"
-            dest = os.path.join(TEAM_CRESTS_DIR, f"{_slugify(away_name)}{ext}")
+            dest = os.path.join(TEAM_CRESTS_DIR, f"{_slugify(away_name)}.png")
             crest_futures.append((schedule_image_download(away_crest_url, dest), "away", away_name, dest))
             away_crest_path = dest
 
-        # Determine match extra info based on status
+        # Determine match status + extra
         status = m.get("match_status", "")
-        extra = None
+        extra = m.get("extra")  # FRO, Postp, etc. from JS
+
+        # Status normalization
         if status:
             status_upper = status.upper()
             if "FT" in status_upper or "FINISHED" in status_upper:
-                extra = "FINISHED"
+                status = "finished"
             elif "AET" in status_upper:
-                extra = "AFTER EXTRA TIME (AET)"
+                status = "finished"
+                extra = extra or "AET"
             elif "PEN" in status_upper:
-                extra = "AFTER PENALTY (AFTER PEN)"
+                status = "finished"
+                extra = extra or "PEN"
             elif "POST" in status_upper:
-                extra = "POSTPONED"
+                status = "postponed"
+                extra = extra or "Postp"
             elif "CANC" in status_upper:
-                extra = "CANCELED"
+                status = "cancelled"
+                extra = extra or "Canc"
             elif "ABD" in status_upper or "ABAN" in status_upper:
-                extra = "ABANDONED"
+                status = "abandoned"
+                extra = extra or "Abn"
             elif "LIVE" in status_upper or "'" in status:
-                extra = "TO FINISH"
+                status = "live"
             elif "HT" in status_upper:
-                extra = "TO FINISH"
+                status = "halftime"
             elif status == "-":
-                extra = "SCHEDULED"
+                status = "scheduled"
+
+        # If match date is in the future -> SCHEDULED
+        match_date_str = m.get("date", "")
+        if match_date_str and not status:
+            try:
+                match_dt = datetime.strptime(match_date_str, "%Y-%m-%d").date()
+                if match_dt > today:
+                    status = "scheduled"
+            except ValueError:
+                pass
+        if not status:
+            status = "scheduled" if tab == "fixtures" else "finished"
+
+        # Extra tag normalization
+        if extra:
+            extra_upper = extra.upper().strip()
+            if "FRO" in extra_upper:
+                extra = "FRO"
+            elif "POSTP" in extra_upper:
+                extra = "Postp"
+            elif "CANC" in extra_upper:
+                extra = "Canc"
+            elif "ABN" in extra_upper or "ABAN" in extra_upper:
+                extra = "Abn"
 
         fixture_rows.append({
             "fixture_id": m.get("fixture_id", ""),
-            "date": m.get("date", ""),
+            "date": match_date_str,
             "time": m.get("time", ""),
-            "league_id": league_db_id,
-            "home_team_id": home_team_id,
+            "league_id": league_id,            # Flashscore league_id string
+            "home_team_id": home_team_id,       # Flashscore team_id string
             "home_team_name": home_name,
-            "away_team_id": away_team_id,
+            "away_team_id": away_team_id,       # Flashscore team_id string
             "away_team_name": away_name,
             "home_score": m.get("home_score"),
             "away_score": m.get("away_score"),
@@ -411,14 +639,13 @@ async def extract_tab(page: Page, league_url: str, tab: str, conn, league_db_id:
     if fixture_rows:
         bulk_upsert_fixtures(conn, fixture_rows)
 
-    # Wait for crest downloads to finish (non-blocking for the event loop)
+    # Wait for crest downloads
     downloaded = 0
     for fut, side, name, dest in crest_futures:
         try:
             result = fut.result(timeout=30)
             if result:
                 downloaded += 1
-                # Update team crest path in DB
                 conn.execute(
                     "UPDATE teams SET crest = ? WHERE name = ? AND country_code = ?",
                     (dest, name, country_code)
@@ -432,8 +659,15 @@ async def extract_tab(page: Page, league_url: str, tab: str, conn, league_db_id:
     return len(fixture_rows)
 
 
-async def enrich_single_league(context, league: Dict[str, Any], conn, idx: int, total: int):
-    """Process a single league: crest + season + fixtures + results."""
+async def enrich_single_league(context, league: Dict[str, Any], conn,
+                                idx: int, total: int,
+                                num_seasons: int = 0, all_seasons: bool = False):
+    """Process a single league: crest + season + fixtures + results.
+
+    Args:
+        num_seasons: Number of past seasons to extract (0 = current only)
+        all_seasons: If True, extract ALL available seasons from archive
+    """
     league_id = league["league_id"]
     name = league["name"]
     url = league.get("url", "")
@@ -456,14 +690,17 @@ async def enrich_single_league(context, league: Dict[str, Any], conn, idx: int, 
         await asyncio.sleep(4)
         await fs_universal_popup_dismissal(page)
 
+        # ── Extract fs_league_id from page URL hash ──────────────────────
+        fs_league_id = await page.evaluate(EXTRACT_FS_LEAGUE_ID_JS)
+        if fs_league_id:
+            print(f"    [FS ID] {fs_league_id}")
+
         # ── Extract + download league crest ──────────────────────────────
         crest_url = await page.evaluate(EXTRACT_CREST_JS)
         crest_path = ""
         if crest_url and not crest_url.startswith("data:"):
-            ext = ".png"
-            dest = os.path.join(LEAGUE_CRESTS_DIR, f"{_slugify(league_id)}{ext}")
+            dest = os.path.join(LEAGUE_CRESTS_DIR, f"{_slugify(league_id)}.png")
             future = schedule_image_download(crest_url, dest)
-            # Don't block — we'll check later
             try:
                 result = future.result(timeout=15)
                 if result:
@@ -476,9 +713,10 @@ async def enrich_single_league(context, league: Dict[str, Any], conn, idx: int, 
         season = await page.evaluate(EXTRACT_SEASON_JS)
         print(f"    [Season] {season or '(not found)'}")
 
-        # ── Update league in DB ──────────────────────────────────────────
+        # ── Update league in DB with fs_league_id ────────────────────────
         upsert_league(conn, {
             "league_id": league_id,
+            "fs_league_id": fs_league_id or None,
             "name": name,
             "country_code": country_code,
             "continent": league.get("continent"),
@@ -486,22 +724,52 @@ async def enrich_single_league(context, league: Dict[str, Any], conn, idx: int, 
             "current_season": season,
             "url": url,
         })
-        league_db_id = get_league_db_id(conn, league_id)
 
-        # ── Extract Fixtures tab ──────────────────────────────────────────
+        # ── Extract current season (Fixtures + Results tabs) ─────────────
         fixtures_count = await extract_tab(
-            page, url, "fixtures", conn, league_db_id, season, country_code
+            page, url, "fixtures", conn, league_id, season, country_code
         )
-
-        # ── Extract Results tab ───────────────────────────────────────────
         results_count = await extract_tab(
-            page, url, "results", conn, league_db_id, season, country_code
+            page, url, "results", conn, league_id, season, country_code
         )
+        total_matches = fixtures_count + results_count
+
+        # ── Historical seasons (if requested) ────────────────────────────
+        if num_seasons > 0 or all_seasons:
+            archive_seasons = await get_archive_seasons(page, url)
+
+            if num_seasons > 0:
+                # Take the last N most recent seasons (skip current which we already did)
+                archive_seasons = archive_seasons[:num_seasons]
+
+            for s_idx, s in enumerate(archive_seasons, 1):
+                s_slug = s.get("slug", "")
+                s_start = s.get("start_year", 0)
+                s_end = s.get("end_year", 0)
+                season_label = f"{s_start}/{s_end}" if s_start != s_end else str(s_start)
+
+                print(f"\n    [Season {s_idx}/{len(archive_seasons)}] {season_label} ({s_slug})")
+
+                # Build the season URL base
+                season_base_url = f"https://www.flashscore.com/football/{s.get('country', '')}/{s_slug}/"
+
+                # Results tab for historical seasons
+                r_count = await extract_tab(
+                    page, season_base_url, "results", conn,
+                    league_id, season_label, country_code
+                )
+                total_matches += r_count
+
+                # Fixtures tab (some historical seasons may still have upcoming fixtures)
+                f_count = await extract_tab(
+                    page, season_base_url, "fixtures", conn,
+                    league_id, season_label, country_code
+                )
+                total_matches += f_count
 
         # ── Mark as processed ────────────────────────────────────────────
         mark_league_processed(conn, league_id)
-        total_matches = fixtures_count + results_count
-        print(f"\n  [{idx}/{total}] [OK] {name} COMPLETE — {total_matches} total matches")
+        print(f"\n  [{idx}/{total}] [OK] {name} COMPLETE -- {total_matches} total matches")
 
     except Exception as e:
         print(f"\n  [{idx}/{total}] [FAIL] {name} FAILED: {e}")
@@ -514,7 +782,8 @@ async def enrich_single_league(context, league: Dict[str, Any], conn, idx: int, 
 #  Main entry point
 # ═══════════════════════════════════════════════════════════════════════════════
 
-async def main(limit: Optional[int] = None, reset: bool = False):
+async def main(limit: Optional[int] = None, reset: bool = False,
+               num_seasons: int = 0, all_seasons: bool = False):
     """Main enrichment entry point."""
     print("\n" + "=" * 60)
     print("  FLASHSCORE LEAGUE ENRICHMENT -> SQLite")
@@ -542,11 +811,16 @@ async def main(limit: Optional[int] = None, reset: bool = False):
         return
 
     total = len(leagues)
-    print(f"\n  [Enrich] {total} leagues to process (concurrency={MAX_CONCURRENCY})")
+    mode_label = "current season"
+    if all_seasons:
+        mode_label = "ALL seasons"
+    elif num_seasons > 0:
+        mode_label = f"last {num_seasons} seasons"
+    print(f"\n  [Enrich] {total} leagues to process ({mode_label}, concurrency={MAX_CONCURRENCY})")
 
-    # ── Ensure crest directories exist ───────────────────────────────────
-    os.makedirs(LEAGUE_CRESTS_DIR, exist_ok=True)
-    os.makedirs(TEAM_CRESTS_DIR, exist_ok=True)
+    # ── Ensure crest directories exist (from project root) ───────────────
+    os.makedirs(os.path.join(BASE_DIR, LEAGUE_CRESTS_DIR), exist_ok=True)
+    os.makedirs(os.path.join(BASE_DIR, TEAM_CRESTS_DIR), exist_ok=True)
 
     # ── Launch Playwright ────────────────────────────────────────────────
     async with async_playwright() as p:
@@ -565,7 +839,10 @@ async def main(limit: Optional[int] = None, reset: bool = False):
 
         async def _worker(league, idx):
             async with sem:
-                await enrich_single_league(context, league, conn, idx, total)
+                await enrich_single_league(
+                    context, league, conn, idx, total,
+                    num_seasons=num_seasons, all_seasons=all_seasons,
+                )
 
         tasks = [_worker(lg, i) for i, lg in enumerate(leagues, 1)]
         await asyncio.gather(*tasks)
@@ -596,6 +873,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Enrich Flashscore leagues -> SQLite")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of leagues to process")
     parser.add_argument("--reset", action="store_true", help="Reset all leagues to unprocessed")
+    parser.add_argument("--seasons", type=int, default=0, help="Number of past seasons to extract (last N)")
+    parser.add_argument("--all-seasons", action="store_true", help="Extract all available seasons")
     args = parser.parse_args()
 
-    asyncio.run(main(limit=args.limit, reset=args.reset))
+    asyncio.run(main(limit=args.limit, reset=args.reset,
+                     num_seasons=args.seasons, all_seasons=args.all_seasons))

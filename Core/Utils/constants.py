@@ -1,8 +1,18 @@
 import os
+from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 
 # Load .env file
 load_dotenv()
+
+# ── Timezone: Africa/Lagos (WAT = UTC+1) ────────────────────────────────────
+# All timestamps across the system MUST use this timezone for consistency
+# regardless of platform (local Windows, GitHub Codespaces, Supabase).
+TZ_NG = timezone(timedelta(hours=1))  # West Africa Time (WAT)
+
+def now_ng() -> datetime:
+    """Return current Nigerian time (Africa/Lagos, WAT = UTC+1)."""
+    return datetime.now(TZ_NG)
 
 # Timeout Constants (in milliseconds)
 NAVIGATION_TIMEOUT = 180000  # 3 minutes for page navigation

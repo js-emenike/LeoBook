@@ -1115,15 +1115,44 @@ async def main(limit: Optional[int] = None, offset: int = 0, reset: bool = False
 
         # Process leagues with concurrency control + 20% sync checkpoints
         sem = asyncio.Semaphore(MAX_CONCURRENCY)
+        crash_counter = 0  # Track consecutive crashes to trigger context restart
 
         async def _worker(league, idx):
-            nonlocal completed_count
+            nonlocal completed_count, context, browser, crash_counter
             async with sem:
-                await enrich_single_league(
-                    context, league, conn, idx, total,
-                    num_seasons=num_seasons, all_seasons=all_seasons,
-                    target_season=target_season,
-                )
+                try:
+                    await enrich_single_league(
+                        context, league, conn, idx, total,
+                        num_seasons=num_seasons, all_seasons=all_seasons,
+                        target_season=target_season,
+                    )
+                    crash_counter = 0  # Reset on success
+                except Exception as e:
+                    err_msg = str(e).lower()
+                    if 'crashed' in err_msg or 'target closed' in err_msg:
+                        crash_counter += 1
+                        if crash_counter >= 2:
+                            print(f"\n  [Recovery] Browser crashed {crash_counter}x — recycling browser...")
+                            try:
+                                await context.close()
+                            except Exception:
+                                pass
+                            try:
+                                await browser.close()
+                            except Exception:
+                                pass
+                            browser = await p.chromium.launch(headless=True)
+                            context = await browser.new_context(
+                                user_agent=(
+                                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                                    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                                ),
+                                viewport={"width": 1920, "height": 1080},
+                                timezone_id="Africa/Lagos",
+                            )
+                            crash_counter = 0
+                            print(f"  [Recovery] Fresh browser ready. Continuing enrichment...")
+
                 completed_count += 1
 
                 # 20% sync checkpoint

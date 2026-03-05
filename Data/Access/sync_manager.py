@@ -157,8 +157,26 @@ SUPABASE_SCHEMA = {
 
 # No column renames needed — unified naming across local SQLite and Supabase.
 # Columns that differ only structurally (e.g. `time` vs `match_time`) are
-# handled at the application layer, not in the sync pipeline.
+# handled by _COL_REMAP below.
 
+# ── Derived: allowed columns per remote table (parsed from SUPABASE_SCHEMA DDL) ──
+# Only columns in this set will be pushed to Supabase. Everything else is stripped.
+_ALLOWED_COLS = {}
+for _tbl, _ddl in SUPABASE_SCHEMA.items():
+    import re as _re
+    # Extract column names from CREATE TABLE DDL
+    _cols = set(_re.findall(r'(?:^|\s)(\w+)\s+(?:TEXT|INTEGER|REAL|JSONB|TIMESTAMPTZ|BOOLEAN)', _ddl))
+    _cols.discard('TABLE')
+    _cols.discard('NOT')
+    _cols.discard('IF')
+    _cols.discard('EXISTS')
+    _cols.discard('DEFAULT')
+    _ALLOWED_COLS[_tbl] = _cols
+
+# Column remaps: local name → remote name (applied before schema filtering)
+_COL_REMAP = {
+    'time': 'match_time',  # schedules local uses 'time', Supabase uses 'match_time'
+}
 
 class SyncManager:
     """Manages bi-directional sync between local SQLite and Supabase."""
@@ -389,19 +407,18 @@ class SyncManager:
         local_table = conf['local_table']
         remote_table = conf['remote_table']
         conflict_key = conf['key']
-        rename_map = {}  # No column renames — unified naming
+        allowed = _ALLOWED_COLS.get(remote_table, set())
 
         cleaned_data = []
         for row in data:
             clean = {}
             for k, v in row.items():
-                # Skip internal SQLite columns not in Supabase
-                if k in ('id', 'rowid', 'hq_crest', 'processed',
-                         'country', 'home_team_name', 'away_team_name'):
-                    continue
+                # Apply column remaps first (e.g. time → match_time)
+                out_key = _COL_REMAP.get(k, k)
 
-                # Apply column renames
-                out_key = rename_map.get(k, k)
+                # Skip columns not in the remote Supabase schema
+                if allowed and out_key not in allowed:
+                    continue
 
                 if v in ('', 'N/A', None, 'None', 'none', 'nan', 'NaN', 'null', 'NULL'):
                     clean[out_key] = None

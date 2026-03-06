@@ -42,17 +42,17 @@ class LLMHealthManager:
     # ASCENDING: max throughput first (search-dict / bulk enrichment)
     # gemini-2.5-pro excluded — reserved for AIGO
     MODELS_ASCENDING = [
-        "gemini-3.1-flash-lite",
+        "gemini-3.1-flash-lite-preview",
         "gemini-2.5-flash-lite",
         "gemini-2.0-flash",
         "gemini-2.5-flash",
         "gemini-3-flash-preview",
     ]
     # Default model for health-check pings (cheapest)
-    PING_MODEL = "gemini-3.1-flash-lite"
+    PING_MODEL = "gemini-3.1-flash-lite-preview"
     GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
     GROK_API_URL = "https://api.x.ai/v1/chat/completions"
-    GROK_MODEL = "grok-4-latest"
+    GROK_MODEL = "grok-4-1-fast-reasoning"
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
@@ -107,7 +107,7 @@ class LLMHealthManager:
     def get_model_chain(self, context: str = "aigo") -> list:
         """
         Returns the model priority chain for the given context.
-       
+      
         Args:
             context: "aigo" for DESCENDING (predictions/analysis),
                      "search_dict" for ASCENDING (bulk enrichment).
@@ -195,7 +195,7 @@ class LLMHealthManager:
                 sample_indices.append(n // 2)
             if n > 2:
                 sample_indices.append(n - 1)
-            sample_indices = list(dict.fromkeys(sample_indices))  # deterministic + unique
+            sample_indices = list(dict.fromkeys(sample_indices)) # deterministic + unique
             sample_results = []
             for idx in sample_indices:
                 alive = await self._ping_key("Gemini", self.GEMINI_API_URL, self.PING_MODEL, self._gemini_keys[idx])
@@ -213,7 +213,7 @@ class LLMHealthManager:
         self._last_ping = time.time()
         self._initialized = True
         with self._state_lock:
-            self._gemini_index = 0  # reset round-robin pointer after fresh ping cycle
+            self._gemini_index = 0 # reset round-robin pointer after fresh ping cycle
         if not self._grok_active and not self._gemini_active:
             print(" [LLM Health] [!] CRITICAL -- All LLM providers are offline! User action required.")
     async def _ping_key(self, name: str, api_url: str, model: str, api_key: str) -> bool:

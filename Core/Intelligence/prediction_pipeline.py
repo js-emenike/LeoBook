@@ -71,11 +71,11 @@ def get_weekly_fixtures(conn=None, days: int = 7) -> List[Dict]:
     now = now_ng()
     today_str = now.strftime("%d.%m.%Y")
 
-    # Build date strings for the next N days (DD.MM.YYYY format matching schedules table)
+    # Scan next 7 days (including today)
     date_strings = []
-    for i in range(days):
-        d = now + timedelta(days=i)
-        date_strings.append(d.strftime("%d.%m.%Y"))
+    for i in range(8):
+        target = now + timedelta(days=i)
+        date_strings.append(target.strftime("%Y-%m-%d")) # Unified v7 Format: YYYY-MM-DD
 
     placeholders = ",".join(["?"] * len(date_strings))
     rows = conn.execute(

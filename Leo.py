@@ -173,24 +173,11 @@ async def run_prologue_p2():
 
 async def run_prologue_p3():
     """Prologue P3: Verify RL adapters are trained for active leagues.
-    Auto-remediates via --train-rl if not ready."""
-    log_state(chapter="Prologue P3", action="Data Readiness: RL Adapters")
-    try:
-        print("\n" + "=" * 60)
-        print("  PROLOGUE P3: Data Readiness — RL Adapters")
-        print("=" * 60)
-
-        ready, stats = check_rl_ready()
-        if not ready:
-            await auto_remediate("rl")
-            ready, stats = check_rl_ready()
-
-        log_audit_event("PROLOGUE_P3", f"RL: base={stats['has_base_model']}, "
-                        f"adapters={stats['adapter_count']}",
-                        status="success" if ready else "partial_failure")
-    except Exception as e:
-        print(f"  [Error] Prologue P3 failed: {e}")
-        log_audit_event("PROLOGUE_P3", f"Failed: {e}", status="failed")
+    [DISABLED] RL is currently bypassed to focus strictly on Rule Engine."""
+    print("\n" + "=" * 60)
+    print("  PROLOGUE P3: RL Adapter Check [DISABLED]")
+    print("=" * 60)
+    print("    Skipping RL readiness check as requested.")
 
 
 # ============================================================

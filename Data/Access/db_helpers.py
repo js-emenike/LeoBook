@@ -72,7 +72,7 @@ def save_prediction(match_data: Dict[str, Any], prediction_result: Dict[str, Any
               f"{match_data.get('home_team')} v {match_data.get('away_team')}")
         return
 
-    date = match_data.get('date', dt.now().strftime("%d.%m.%Y"))
+    date = match_data.get('date', dt.now().strftime("%Y-%m-%d"))
 
     row = {
         'fixture_id': fixture_id,
@@ -162,7 +162,7 @@ def get_last_processed_info() -> Dict:
                 last_processed_info = {
                     'date': date_str,
                     'id': row['fixture_id'],
-                    'date_obj': dt.strptime(date_str, "%d.%m.%Y").date()
+                    'date_obj': dt.strptime(date_str, "%Y-%m-%d").date()
                 }
                 print(f"    [Resume] Last processed: ID {last_processed_info['id']} on {date_str}")
             except Exception:
@@ -204,11 +204,11 @@ def transform_streamer_match_to_schedule(m: Dict[str, Any]) -> Dict[str, Any]:
         ts = m.get('timestamp')
         if ts:
             try:
-                date_str = dt.fromisoformat(ts.replace('Z', '+00:00')).strftime("%d.%m.%Y")
+                date_str = dt.fromisoformat(ts.replace('Z', '+00:00')).strftime("%Y-%m-%d")
             except Exception:
-                date_str = now.strftime("%d.%m.%Y")
+                date_str = now.strftime("%Y-%m-%d")
         else:
-            date_str = now.strftime("%d.%m.%Y")
+            date_str = now.strftime("%Y-%m-%d")
 
     league_id = m.get('league_id', '')
     if not league_id and m.get('region_league'):

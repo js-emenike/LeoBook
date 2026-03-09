@@ -78,6 +78,19 @@ The RL model uses a **30-dimensional action space** (defined in `market_space.py
 - **Registry**: `AdapterRegistry` tracks all known leagues/teams. Saved to `Data/Store/models/adapter_registry.json`.
 - **Inference**: High-velocity prediction (30 actions) gated by the **Stairway Gate** (1.20 ≤ odds ≤ 4.00). Returns EV-weighted recommendations.
 
+#### RL Validation Suite (Backtest & Paper Trading)
+LeoBook employs a dual-validation strategy to ensure model reliability before real capital is deployed:
+
+- **Walk-Forward Backtest Harness** (`backtest.py`):
+    - Implementation of rolling-window training and next-day evaluation.
+    - Slices history into 90-day training windows to prevent data leakage.
+    - Measures accuracy, coverage, synthetic ROI, and calibration quartiles.
+- **Paper Trading Log** (`paper_trades` table):
+    - Auto-logged during live Chapter 1, Page 2 cycles.
+    - Simulates the **Project Stairway 7-step Ladder** (₦1,000 → ₦729,000).
+    - Resolved asynchronously by `outcome_reviewer.py` once match scores are final.
+    - Viewable via `python Leo.py --paper-summary`.
+
 #### Timezone Anchor: `now_ng`
 
 `now_ng` uses **West Africa Time (WAT, UTC+1)** as the system clock. This is intentional:
@@ -153,6 +166,9 @@ Leo.py supports two modes of operation:
 | `--prologue`                         | Run all Prologue pages (P1+P2+P3)                                                                                                                                    |
 | `--data-quality`                     | Run column-level gap scan + Invalid ID detection + Season completeness init                                                                                          |
 | `--season-completeness`              | Show summary report of league-season coverage (%)                                                                                                                    |
+| `--backtest-rl`                      | Run RL Walk-Forward Backtest (rolling training + next-day eval)                                                                                                      |
+| `--bt-start`, `--bt-end`             | Set start/end dates for RL Backtest (e.g., 2026-01-01)                                                                                                               |
+| `--paper-summary`                    | Display aggregated statistics from the Paper Trading Log                                                                                                             |
 | `--bypass-cache`                     | Force O(N) scan for Prologue gates, skipping materialized cache                                                                                                      |
 | `--set-expected-matches`             | Manually override expected match count for a season                                                                                                                  |
 

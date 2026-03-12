@@ -7,9 +7,15 @@
 #   --reset    Full reset — re-enrich ALL leagues from scratch
 #
 # Season targeting:
-#   --season N   Specific season by offset (0=current, 1=2024/2025, 2=2023/2024...)
-#   --seasons N  Last N past seasons (e.g. 5 = 2021-2025)
+#   --season N   Specific season by offset (0=current, 1=most-recent-past, 2=second-past...)
+#   --seasons N  Last N past seasons (e.g. 5 = the 5 most recent past seasons)
 #   --all-seasons  All available seasons
+#
+#   Historical season discovery uses the /archive/ page by default.
+#   This correctly handles BOTH split-season leagues (2023/2024 pattern, e.g. Premier League)
+#   AND calendar-year leagues (2024 pattern, e.g. J1 League, MLS, most Asian/South-American
+#   leagues). Direct URL construction is NOT used — the archive gives us the exact slugs
+#   Flashscore itself uses.
 #
 # Usage:
 #   python -m Scripts.enrich_leagues                     # Gap scan (default)
@@ -25,6 +31,10 @@
 #   - Workload announced at start
 #   - Cloud sync at every 20% checkpoint
 #   - All CSS selectors loaded from Config/knowledge.json via SelectorManager
+#   - Dynamic hydration: waits for DOM row-count stability instead of fixed sleeps
+#   - Scroll-to-load: scrolls in viewport increments to trigger lazy rendering
+#   - Archive-first history: uses /archive/ page to discover correct season URLs
+#     for all league types (split-season AND calendar-year)
 
 import asyncio
 import argparse
@@ -32,6 +42,7 @@ import json
 import os
 import re
 import sys
+import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, date
@@ -66,10 +77,32 @@ LEAGUE_CRESTS_DIR = os.path.join(CRESTS_DIR, "leagues")
 TEAM_CRESTS_DIR = os.path.join(CRESTS_DIR, "teams")
 
 # ── Config ───────────────────────────────────────────────────────────────────
-MAX_CONCURRENCY = 3          # Parallel browser tabs
+MAX_CONCURRENCY = 5          # Parallel browser tabs
 MAX_SHOW_MORE = 50           # Exhaustive "Show more" clicks
 DOWNLOAD_WORKERS = 8         # ThreadPool workers for image downloads
 REQUEST_TIMEOUT = 15         # Seconds for image download timeout
+
+# ── Hydration & scroll tuning ─────────────────────────────────────────────────
+# Row count must be stable for this many seconds before we consider the page
+# fully hydrated. Increase if leagues with heavy JS rendering drop rows.
+HYDRATION_STABLE_FOR: float = 2.0
+# Hard cap on how long we will wait for content to stabilise. 30 s is
+# deliberately generous: more rows > faster loads.
+HYDRATION_MAX_WAIT: float = 30.0
+# Per "Show more" click: how long to wait for new rows to appear (seconds).
+SHOW_MORE_ROW_WAIT: float = 8.0
+# Poll interval used inside all hydration loops.
+HYDRATION_POLL_INTERVAL: float = 0.4
+# Scroll: max number of scroll steps before giving up. Each step is one
+# viewport height. 40 steps × typical 1080 px viewport ≈ 43 000 px of content,
+# which is more than enough for any Flashscore league list.
+SCROLL_MAX_STEPS: int = 40
+# Scroll: seconds to wait after each viewport scroll before checking if new
+# rows appeared. Short because we are polling, not sleeping blindly.
+SCROLL_STEP_WAIT: float = 0.6
+# Scroll: if no new rows appear after this many consecutive steps, assume the
+# page bottom has been reached and stop scrolling.
+SCROLL_NO_NEW_ROWS_LIMIT: int = 3
 
 # ── Globals ──────────────────────────────────────────────────────────────────
 executor = ThreadPoolExecutor(max_workers=DOWNLOAD_WORKERS)
@@ -113,6 +146,223 @@ def _slugify(name: str) -> str:
 def schedule_image_download(url: str, dest_path: str) -> "Future":
     """Submit an image download to the thread pool. Returns a Future."""
     return executor.submit(_download_image, url, dest_path)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Dynamic Hydration Helpers
+#
+#  Replace all fixed asyncio.sleep() calls that previously guarded against
+#  under-hydrated pages. The core insight: we don't want to wait a fixed
+#  amount of time — we want to wait until the DOM has actually settled.
+#  A 30-second cap is deliberate: more rows are always worth the wait.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def _wait_for_rows_stable(
+    page: Page,
+    row_selector: str,
+    stable_for: float = HYDRATION_STABLE_FOR,
+    max_wait: float = HYDRATION_MAX_WAIT,
+) -> int:
+    """Poll match-row count until it stops growing, then return the final count.
+
+    Algorithm:
+      - Every HYDRATION_POLL_INTERVAL seconds, query the row count.
+      - If the count changed, reset the stable-since clock.
+      - If the count has been the same for `stable_for` seconds, we are done.
+      - Hard-exit after `max_wait` seconds regardless.
+
+    Args:
+        page:           Playwright Page object.
+        row_selector:   CSS selector that matches individual match rows.
+        stable_for:     Seconds without a count change before we declare stable.
+        max_wait:       Hard cap in seconds.
+
+    Returns:
+        Final row count at the moment stability was declared (or timeout hit).
+    """
+    deadline = time.monotonic() + max_wait
+    last_count: int = -1
+    stable_since: Optional[float] = None
+
+    while time.monotonic() < deadline:
+        try:
+            count = await page.locator(row_selector).count()
+        except Exception:
+            count = 0
+
+        now = time.monotonic()
+        if count != last_count:
+            last_count = count
+            stable_since = now
+        elif stable_since is not None and (now - stable_since) >= stable_for:
+            return last_count
+
+        await asyncio.sleep(HYDRATION_POLL_INTERVAL)
+
+    return last_count
+
+
+async def _wait_for_page_hydration(
+    page: Page,
+    selectors: dict,
+    max_wait: float = HYDRATION_MAX_WAIT,
+) -> int:
+    """Wait for a match-list page to fully hydrate after navigation.
+
+    Two-phase strategy:
+      Phase 1 — Container presence (up to max_wait / 2):
+        Wait for the main container selector to appear in the DOM.
+
+      Phase 2 — Row stability (up to remaining time):
+        Hand off to _wait_for_rows_stable() so we capture every batch of rows
+        that JS appends after the initial render.
+
+    Args:
+        page:      Playwright Page object.
+        selectors: Full selector dict for CONTEXT_LEAGUE from SelectorManager.
+        max_wait:  Hard cap across both phases combined.
+
+    Returns:
+        Initial row count (before scroll / Show More).
+    """
+    container_sel: str = selectors.get("main_container", "")
+    row_sel: str = selectors.get("match_row", "[id^='g_1_']")
+
+    phase1_budget = max_wait / 2.0
+    phase1_start = time.monotonic()
+
+    if container_sel:
+        try:
+            await page.wait_for_selector(
+                container_sel,
+                timeout=int(phase1_budget * 1000),
+            )
+        except Exception:
+            pass  # Container never appeared — proceed anyway; row scan will handle it
+
+    phase1_elapsed = time.monotonic() - phase1_start
+    phase2_budget = max(2.0, max_wait - phase1_elapsed)
+
+    return await _wait_for_rows_stable(page, row_sel, stable_for=HYDRATION_STABLE_FOR,
+                                       max_wait=phase2_budget)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Scroll-to-Load Helper
+#
+#  Flashscore uses virtual DOM / intersection-observer lazy loading.
+#  Match rows that are below the visible viewport may not exist in the DOM
+#  until the user scrolls near them. This helper scrolls in viewport-height
+#  increments, waits briefly after each step, and stops as soon as no new
+#  rows appear for SCROLL_NO_NEW_ROWS_LIMIT consecutive steps or the page
+#  bottom is reached.
+#
+#  Call order in extract_tab:
+#    1. page.goto()  →  _wait_for_page_hydration()  (waits for initial rows)
+#    2. _scroll_to_load()                            (triggers lazy rows)
+#    3. _expand_show_more()                          (loads paginated batches)
+#    4. page.evaluate(EXTRACT_MATCHES_JS)            (scrapes everything)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def _scroll_to_load(
+    page: Page,
+    row_selector: str,
+    max_steps: int = SCROLL_MAX_STEPS,
+    step_wait: float = SCROLL_STEP_WAIT,
+    no_new_rows_limit: int = SCROLL_NO_NEW_ROWS_LIMIT,
+) -> int:
+    """Scroll down the page in viewport-height increments to trigger lazy loading.
+
+    Flashscore renders rows via IntersectionObserver: rows below the fold are
+    not in the DOM until the viewport scrolls near them. A fixed sleep is
+    useless here because we don't know how many rows exist until we scroll.
+    This function scrolls, observes, and stops as soon as the list is exhausted.
+
+    Algorithm:
+      - Retrieve viewport height via JS (typically 1080 px in headless Chrome).
+      - Scroll one viewport height at a time using window.scrollBy().
+      - After each step, poll for new rows (up to step_wait seconds).
+      - If the row count did not increase for no_new_rows_limit consecutive
+        steps, the list is exhausted — stop scrolling.
+      - Also stop if window.scrollY + window.innerHeight >= document.body.scrollHeight
+        (true page bottom).
+
+    Args:
+        page:               Playwright Page object.
+        row_selector:       CSS selector matching individual match rows.
+        max_steps:          Hard cap on scroll iterations.
+        step_wait:          Seconds to wait after each scroll step.
+        no_new_rows_limit:  Consecutive steps with no new rows before stopping.
+
+    Returns:
+        Total row count after scrolling is complete.
+    """
+    scroll_js = """() => {
+        const h = window.innerHeight || document.documentElement.clientHeight || 1080;
+        window.scrollBy({ top: h, behavior: 'instant' });
+        return {
+            scrollY:    window.scrollY,
+            innerHeight: window.innerHeight,
+            bodyHeight:  document.body.scrollHeight,
+        };
+    }"""
+
+    last_count = 0
+    no_new_rows_streak = 0
+    total_scrolled = 0
+
+    for step in range(max_steps):
+        before_count = await page.locator(row_selector).count()
+
+        try:
+            pos = await page.evaluate(scroll_js)
+        except Exception:
+            break  # Page navigated away or context closed
+
+        total_scrolled += 1
+        await asyncio.sleep(step_wait)
+
+        # Poll briefly for new rows after the scroll
+        deadline = time.monotonic() + step_wait
+        after_count = before_count
+        while time.monotonic() < deadline:
+            try:
+                after_count = await page.locator(row_selector).count()
+            except Exception:
+                break
+            if after_count > before_count:
+                break
+            await asyncio.sleep(HYDRATION_POLL_INTERVAL)
+
+        if after_count > before_count:
+            no_new_rows_streak = 0
+        else:
+            no_new_rows_streak += 1
+
+        last_count = after_count
+
+        # Check true page bottom
+        at_bottom = (
+            pos.get("scrollY", 0) + pos.get("innerHeight", 0)
+            >= pos.get("bodyHeight", 1) - 50  # 50 px tolerance
+        )
+        if at_bottom:
+            break
+
+        if no_new_rows_streak >= no_new_rows_limit:
+            break
+
+    # Scroll back to top so subsequent interactions (Show More button etc.)
+    # are accessible without Playwright having to auto-scroll to them.
+    try:
+        await page.evaluate("() => window.scrollTo({ top: 0, behavior: 'instant' })")
+    except Exception:
+        pass
+
+    if total_scrolled:
+        print(f"      [Scroll] {total_scrolled} steps → {last_count} rows visible")
+
+    return last_count
 
 
 # ── Supabase storage upload helper ────────────────────────────────────────────
@@ -429,8 +679,11 @@ EXTRACT_ARCHIVE_JS = r"""(selectors) => {
     const seasons = [];
     const seen = new Set();
     
-    // Strategy: scan ALL links on the archive page for season URL patterns
-    // Selectors from knowledge.json are tried first, then fallback to all <a> tags
+    // Strategy: scan ALL links on the archive page for season URL patterns.
+    // Selectors from knowledge.json are tried first, then fallback to all <a> tags.
+    // This handles BOTH season patterns Flashscore uses:
+    //   Split-season:   /football/england/premier-league-2023-2024/
+    //   Calendar-year:  /football/japan/j1-league-2024/
     const selectorSources = [
         s.archive_links,
         s.archive_table_links,
@@ -452,25 +705,36 @@ EXTRACT_ARCHIVE_JS = r"""(selectors) => {
                     country: match[1],
                     start_year: parseInt(match[3]),
                     end_year: parseInt(match[4]),
+                    is_split: true,
+                    label: `${match[3]}/${match[4]}`,
                     url: href.startsWith('http') ? href : 'https://www.flashscore.com' + href
                 });
             }
             
-            // Match calendar year: e.g. ligue-1-2024
+            // Match calendar year: e.g. j1-league-2024
+            // Must not already be matched as split-season (guard: ensure no second 4-digit suffix)
             const calMatch = href.match(/\/football\/([^/]+)\/([^/]+-(\d{4}))\/?$/);
             if (calMatch && !seen.has(calMatch[2])) {
-                seen.add(calMatch[2]);
-                seasons.push({
-                    slug: calMatch[2],
-                    country: calMatch[1],
-                    start_year: parseInt(calMatch[3]),
-                    end_year: parseInt(calMatch[3]),
-                    url: href.startsWith('http') ? href : 'https://www.flashscore.com' + href
-                });
+                // Avoid matching the start of a split-season slug that ends in "-2024-2025"
+                const alreadySeenAsSplit = [...seen].some(s => s.startsWith(calMatch[2] + '-'));
+                if (!alreadySeenAsSplit) {
+                    seen.add(calMatch[2]);
+                    seasons.push({
+                        slug: calMatch[2],
+                        country: calMatch[1],
+                        start_year: parseInt(calMatch[3]),
+                        end_year: parseInt(calMatch[3]),
+                        is_split: false,
+                        label: calMatch[3],
+                        url: href.startsWith('http') ? href : 'https://www.flashscore.com' + href
+                    });
+                }
             }
         }
     }
-    seasons.sort((a, b) => b.start_year - a.start_year);
+
+    // Sort: most recent season first (by start_year desc, then end_year desc)
+    seasons.sort((a, b) => b.start_year - a.start_year || b.end_year - a.end_year);
     return seasons;
 }"""
 
@@ -505,14 +769,45 @@ def parse_season_string(season_str: str) -> dict:
 
 @AIGOSuite.aigo_retry(max_retries=2, delay=3.0)
 async def get_archive_seasons(page: Page, league_url: str) -> List[Dict]:
-    """Navigate to the archive page and extract all available seasons."""
+    """Navigate to the /archive/ page and extract ALL available past seasons.
+
+    This is the ONLY source used for historical season URL discovery.
+    It correctly handles:
+      - Split-season leagues (2023/2024): /football/england/premier-league-2023-2024/
+      - Calendar-year leagues (2024):     /football/japan/j1-league-2024/
+
+    The returned list is sorted most-recent-first and filtered to exclude
+    the current season (which is already handled by the main league URL).
+
+    Args:
+        page:        Playwright Page to reuse (avoids opening a new tab).
+        league_url:  Base league URL, e.g. https://www.flashscore.com/football/england/premier-league/
+
+    Returns:
+        List of dicts: {slug, country, start_year, end_year, is_split, label, url}
+        Empty list if archive page fails or has no links.
+    """
     archive_url = league_url.rstrip("/") + "/archive/"
     print(f"    [Archive] Navigating to {archive_url}")
     try:
         await page.goto(archive_url, wait_until="domcontentloaded", timeout=60000)
-        await asyncio.sleep(3)
         await fs_universal_popup_dismissal(page)
+
+        # Wait for archive season links to appear.
+        # Archive pages have no match rows — target season links directly.
         selectors = selector_mgr.get_all_selectors_for_context(CONTEXT_LEAGUE)
+        archive_link_sel: str = (
+            selectors.get("archive_links")
+            or selectors.get("archive_table_links")
+            or "a[href*='/football/']"
+        )
+        try:
+            await page.wait_for_selector(archive_link_sel, timeout=20000)
+        except Exception:
+            # Links didn't appear within 20 s — proceed anyway; JS extractor
+            # returns an empty list which is handled gracefully upstream.
+            pass
+
         seasons = await page.evaluate(EXTRACT_ARCHIVE_JS, selectors)
         print(f"    [Archive] Found {len(seasons)} historical seasons")
         return seasons or []
@@ -521,26 +816,94 @@ async def get_archive_seasons(page: Page, league_url: str) -> List[Dict]:
         return []
 
 
+def _select_seasons_from_archive(
+    archive_seasons: List[Dict],
+    target_season: Optional[int],
+    num_seasons: int,
+    all_seasons: bool,
+) -> List[Dict]:
+    """Given the full archive list, return only the seasons we want to process.
+
+    The archive list is already sorted most-recent-first by get_archive_seasons.
+
+    Selection logic:
+      --all-seasons      → return all entries
+      --season N (N>=1)  → return only the Nth entry (1-indexed, so index N-1)
+      --seasons N        → return the first N entries (most recent N past seasons)
+
+    Args:
+        archive_seasons: Full sorted archive list from get_archive_seasons().
+        target_season:   CLI --season value (None or int). 0 = current (not past).
+        num_seasons:     CLI --seasons value (0 = not requested).
+        all_seasons:     CLI --all-seasons flag.
+
+    Returns:
+        Filtered, ordered list of season dicts to process.
+    """
+    if not archive_seasons:
+        return []
+
+    if all_seasons:
+        return archive_seasons
+
+    if target_season is not None and target_season >= 1:
+        # --season N: the Nth most-recent past season (1-indexed)
+        idx = target_season - 1
+        if idx < len(archive_seasons):
+            return [archive_seasons[idx]]
+        print(f"    [Archive] Offset {target_season} out of range — only {len(archive_seasons)} past seasons found")
+        return []
+
+    if num_seasons > 0:
+        # --seasons N: the N most-recent past seasons
+        return archive_seasons[:num_seasons]
+
+    return []
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Core Extraction
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @AIGOSuite.aigo_retry(max_retries=2, delay=2.0)
 async def _expand_show_more(page: Page, max_clicks: int = MAX_SHOW_MORE):
-    """Click 'Show more matches' exhaustively."""
+    """Click 'Show more matches' exhaustively.
+
+    Before each click: snapshot the current row count.
+    After each click: poll until new rows arrive (up to SHOW_MORE_ROW_WAIT s).
+    If a click produces zero new rows: the list is exhausted — stop immediately.
+    This prevents wasted time on a stuck page and captures all rows on fast ones.
+    """
     clicks = 0
-    selector = selector_mgr.get_selector(CONTEXT_LEAGUE, "show_more_matches")
+    btn_selector = selector_mgr.get_selector(CONTEXT_LEAGUE, "show_more_matches")
+    row_selector = selector_mgr.get_selector(CONTEXT_LEAGUE, "match_row") or "[id^='g_1_']"
+
     while clicks < max_clicks:
         try:
-            btn = page.locator(selector)
+            btn = page.locator(btn_selector)
             if await btn.count() > 0 and await btn.first.is_visible(timeout=3000):
+                before_count = await page.locator(row_selector).count()
                 await btn.first.click()
-                await asyncio.sleep(1.5)
+
+                # Wait for new rows to actually arrive (up to SHOW_MORE_ROW_WAIT s)
+                waited = 0.0
+                new_rows_arrived = False
+                while waited < SHOW_MORE_ROW_WAIT:
+                    await asyncio.sleep(HYDRATION_POLL_INTERVAL)
+                    waited += HYDRATION_POLL_INTERVAL
+                    after_count = await page.locator(row_selector).count()
+                    if after_count > before_count:
+                        new_rows_arrived = True
+                        break
+
                 clicks += 1
+                if not new_rows_arrived:
+                    break
             else:
                 break
         except Exception:
             break
+
     if clicks:
         print(f"      [Expand] Clicked 'Show more' {clicks} times")
 
@@ -551,15 +914,26 @@ async def extract_tab(page: Page, league_url: str, tab: str, conn,
                      region_league: str = "") -> int:
     """Navigate to a league tab (fixtures or results), expand, extract, and save matches.
 
+    Loading sequence:
+      1. page.goto()                   — navigate
+      2. fs_universal_popup_dismissal  — clear overlays
+      3. _wait_for_page_hydration()    — wait for initial row render
+      4. _scroll_to_load()             — scroll to trigger lazy-loaded rows
+      5. _expand_show_more()           — click pagination buttons
+      6. EXTRACT_MATCHES_JS            — scrape all visible rows
+
     Args:
         league_id: Flashscore league_id string (NOT SQLite auto-increment).
     """
     url = league_url.rstrip("/") + f"/{tab}/"
     print(f"    [{tab.upper()}] Navigating to {url}")
 
+    # Fetch selectors early — needed for hydration, scroll, and extraction.
+    tab_selectors = selector_mgr.get_all_selectors_for_context(CONTEXT_LEAGUE)
+    row_sel: str = tab_selectors.get("match_row", "[id^='g_1_']")
+
     try:
         resp = await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-        await asyncio.sleep(3)
         await fs_universal_popup_dismissal(page)
 
         # Detect 404 or redirect (league may not play in this season)
@@ -572,17 +946,32 @@ async def extract_tab(page: Page, league_url: str, tab: str, conn,
         if actual_url != expected_base and tab not in actual_url:
             print(f"    [{tab.upper()}] Redirected (season not available)")
             return 0
+
+        # Phase 1: Wait for initial rows to appear and stabilise.
+        initial_count = await _wait_for_page_hydration(page, tab_selectors,
+                                                        max_wait=HYDRATION_MAX_WAIT)
+        if initial_count > 0:
+            print(f"      [Hydrate] {initial_count} rows after initial load")
+
+        # Phase 2: Scroll to trigger any lazy-loaded rows below the fold.
+        # Flashscore uses IntersectionObserver — rows below the viewport may
+        # not exist in the DOM until scrolled near. This step surfaces them
+        # BEFORE clicking "Show more", which ensures the button count is accurate.
+        scrolled_count = await _scroll_to_load(page, row_sel)
+        if scrolled_count > initial_count:
+            print(f"      [Scroll] +{scrolled_count - initial_count} additional rows revealed")
+
     except Exception as e:
         print(f"    [{tab.upper()}] Navigation failed: {e}")
         return 0
 
-    # Expand all matches
+    # Phase 3: Exhaust all "Show more" pagination buttons.
     await _expand_show_more(page)
 
     # Build season context for smart year detection
     season_ctx = parse_season_string(season)
     season_ctx["tab"] = tab
-    season_ctx["selectors"] = selector_mgr.get_all_selectors_for_context(CONTEXT_LEAGUE)
+    season_ctx["selectors"] = tab_selectors
 
     # Extract match data with season context
     try:
@@ -764,11 +1153,18 @@ async def enrich_single_league(context, league: Dict[str, Any], conn,
                                 target_season: Optional[int] = None):
     """Process a single league: region + crest + season + fixtures + results.
 
+    Historical season discovery:
+      Always uses the /archive/ page — never constructs URLs by guessing
+      year patterns. This correctly handles:
+        - Split-season European leagues (2023/2024): premier-league-2023-2024
+        - Calendar-year Asian/American leagues (2024): j1-league-2024
+
     Args:
-        num_seasons: Number of past seasons to extract (0 = current only)
-        all_seasons: If True, extract ALL available seasons from archive
+        num_seasons:   Number of past seasons to extract (0 = current only)
+        all_seasons:   If True, extract ALL available seasons from archive
         target_season: Season offset (0=current, 1=last past, 2=second past, etc.)
-                       When 0 or None, current season runs. When >=1, ONLY that archive season.
+                       When 0 or None, current season runs. When >=1, ONLY that
+                       past season (looked up from archive, not constructed).
     """
     league_id = league["league_id"]
     name = league["name"]
@@ -790,38 +1186,41 @@ async def enrich_single_league(context, league: Dict[str, Any], conn,
     try:
         # ── Navigate to league page ──────────────────────────────────────
         await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-        await asyncio.sleep(4)
         await fs_universal_popup_dismissal(page)
+
+        # Wait for the league header / breadcrumbs to hydrate.
+        # Breadcrumbs are a reliable signal that the metadata panel has rendered.
+        # Falls back to a short sleep only if the selector never appears.
+        selectors = selector_mgr.get_all_selectors_for_context(CONTEXT_LEAGUE)
+        breadcrumb_sel: str = selectors.get("breadcrumb_links", ".breadcrumb__link")
+        try:
+            await page.wait_for_selector(breadcrumb_sel, timeout=15000)
+        except Exception:
+            await asyncio.sleep(2)  # Fallback for obscure leagues with no breadcrumbs
 
         # ── Extract fs_league_id from page config ─────────────────────────
         fs_league_id = await page.evaluate(EXTRACT_FS_LEAGUE_ID_JS)
         if fs_league_id:
             print(f"    [FS ID] {fs_league_id}")
 
-        # Retrieve all selectors once for this context
-        selectors = selector_mgr.get_all_selectors_for_context(CONTEXT_LEAGUE)
-
         # ── Extract region from URL (primary) + breadcrumb (fallback) ────
-        # URL pattern: /football/{country}/{league-slug}/ — always reliable
         region_name = ""
         region_url_href = ""
         url_parts = url.rstrip('/').split('/')
-        # Find 'football' in URL parts, country is the next segment
         try:
             fb_idx = url_parts.index('football')
             if fb_idx + 1 < len(url_parts):
                 country_slug = url_parts[fb_idx + 1]
-                region_name = country_slug.replace('-', ' ').title()  # e.g. "albania" -> "Albania"
+                region_name = country_slug.replace('-', ' ').title()
                 region_url_href = f"https://www.flashscore.com/football/{country_slug}/"
         except ValueError:
             pass
 
-        # Fallback: try breadcrumb if URL parsing failed
         if not region_name:
             try:
                 await page.wait_for_selector(selectors.get('breadcrumb_links', '.breadcrumb__link'), timeout=5000)
             except Exception:
-                pass  # Breadcrumbs may not load — URL is our primary source
+                pass
             region_name = await page.evaluate("""(s) => {
                 const links = document.querySelectorAll(s.breadcrumb_links);
                 if (links.length >= 2) return links[1].innerText.trim();
@@ -829,15 +1228,14 @@ async def enrich_single_league(context, league: Dict[str, Any], conn,
                 return '';
             }""", selectors)
 
-        # Try to upgrade region_name with breadcrumb text (proper casing/official name)
         breadcrumb_region = await page.evaluate("""(s) => {
             const links = document.querySelectorAll(s.breadcrumb_links);
             if (links.length >= 2) return links[1].innerText.trim();
             return '';
         }""", selectors)
         if breadcrumb_region and breadcrumb_region.upper() != 'FOOTBALL':
-            region_name = breadcrumb_region  # Use official Flashscore name
-            
+            region_name = breadcrumb_region
+
         if not region_url_href:
             region_url_href = await page.evaluate("""(s) => {
                 const links = document.querySelectorAll(s.breadcrumb_links);
@@ -847,8 +1245,6 @@ async def enrich_single_league(context, league: Dict[str, Any], conn,
                 return href.startsWith('http') ? href : (href ? 'https://www.flashscore.com' + href : '');
             }""", selectors)
 
-        # Region flag: Flashscore uses CSS sprite classes (e.g. fl_5), not <img> tags
-        # We still attempt extraction in case they switch to images in the future
         region_flag_url = await page.evaluate("""(s) => {
             const links = document.querySelectorAll(s.breadcrumb_links);
             const target = links.length >= 2 ? links[1] : links[0];
@@ -882,10 +1278,9 @@ async def enrich_single_league(context, league: Dict[str, Any], conn,
             try:
                 result = future.result(timeout=15)
                 if result:
-                    # Upload to Supabase and store public URL
                     remote_name = f"{_slugify(league_id)}.png"
                     sb_url = upload_crest_to_supabase(result, "league-crests", remote_name)
-                    crest_path = sb_url if sb_url else result  # Supabase URL or local fallback
+                    crest_path = sb_url if sb_url else result
                     src = "Supabase" if sb_url else "local"
                     print(f"    [Crest] [OK] League crest -> {src}: {os.path.basename(local_dest)}")
             except Exception:
@@ -896,7 +1291,6 @@ async def enrich_single_league(context, league: Dict[str, Any], conn,
         print(f"    [Season] {season or '(not found)'}")
 
         # ── Construct region_league from seed data ────────────────────────
-        # continent is from leagues.json (e.g. "Europe", "Africa") — always available
         region_league = f"{continent}: {name}" if continent else name
 
         # ── Update league in DB with all extracted data ───────────────────
@@ -925,60 +1319,53 @@ async def enrich_single_league(context, league: Dict[str, Any], conn,
         )
         total_matches = fixtures_count + results_count
 
-        # ── Historical seasons (if requested) ────────────────────────
-        # URL construction: {base}/football/{country}/{slug}-{startYear}-{endYear}/
-        # No archive page needed — construct directly from year offset
-        # --season 0 = current only, --season N = offset N past season
-        # --seasons N = last N past seasons, --all-seasons = archive fallback
+        # ── Historical seasons via archive (default) ──────────────────────
+        #
+        # WHY ARCHIVE IS THE DEFAULT:
+        # Direct URL construction (slug + year arithmetic) assumes all leagues
+        # use split-season patterns (e.g. 2023-2024). This is wrong for
+        # calendar-year leagues like J1 League (Japan), MLS (USA), and most
+        # leagues in Asia and South America, where past seasons use patterns
+        # like j1-league-2024 — not j1-league-2024-2025.
+        #
+        # The /archive/ page gives us the exact URLs Flashscore itself uses,
+        # correct for ALL league types. No guessing, no 404s.
+        #
         need_past_seasons = (
             (target_season is not None and target_season >= 1) or
             num_seasons > 0 or
             all_seasons
         )
         if need_past_seasons:
-            # Extract slug and country from league URL
-            # URL: https://www.flashscore.com/football/{country}/{slug}/
-            url_stripped = url.rstrip('/')
-            slug = url_stripped.split('/')[-1]       # e.g. "npfl"
-            country_slug = url_stripped.split('/')[-2]  # e.g. "nigeria"
+            # Discover all past seasons from the archive page
+            archive_seasons = await get_archive_seasons(page, url)
 
-            from datetime import datetime
-            current_year = datetime.now().year  # e.g. 2026
+            # Select only the seasons we want based on CLI flags
+            seasons_to_process = _select_seasons_from_archive(
+                archive_seasons,
+                target_season=target_season,
+                num_seasons=num_seasons,
+                all_seasons=all_seasons,
+            )
 
-            if all_seasons:
-                # --all-seasons: fall back to archive page for full discovery
-                archive_seasons = await get_archive_seasons(page, url)
-                season_urls = []
-                for s in archive_seasons:
-                    s_slug = s.get("slug", "")
-                    s_start = s.get("start_year", 0)
-                    s_end = s.get("end_year", 0)
-                    label = f"{s_start}/{s_end}" if s_start != s_end else str(s_start)
-                    s_url = f"https://www.flashscore.com/football/{s.get('country', '')}/{s_slug}/"
-                    season_urls.append((label, s_url))
+            if not seasons_to_process:
+                print(f"    [Archive] No matching past seasons found for {name}")
             else:
-                # Direct URL construction from year offset
-                season_urls = []
-                if target_season is not None and target_season >= 1:
-                    # --season N: only the Nth past season
-                    offsets = [target_season]
-                else:
-                    # --seasons N: last N past seasons (offsets 1..N)
-                    offsets = list(range(1, num_seasons + 1))
+                season_type_info = "split-season" if (
+                    seasons_to_process[0].get("is_split") if seasons_to_process else False
+                ) else "calendar-year"
+                print(f"    [Archive] Processing {len(seasons_to_process)} past season(s) [{season_type_info}]")
 
-                for offset_n in offsets:
-                    start_yr = current_year - 1 - offset_n  # e.g. offset 1 -> 2024
-                    end_yr = current_year - offset_n        # e.g. offset 1 -> 2025
-                    season_label = f"{start_yr}/{end_yr}"
-                    season_slug = f"{slug}-{start_yr}-{end_yr}"
-                    season_url = f"https://www.flashscore.com/football/{country_slug}/{season_slug}/"
-                    season_urls.append((season_label, season_url))
+            for s_idx, season_meta in enumerate(seasons_to_process, 1):
+                season_label = season_meta["label"]    # e.g. "2023/2024" or "2024"
+                season_base_url = season_meta["url"]   # exact URL from Flashscore
+                is_split = season_meta.get("is_split", False)
 
-            for s_idx, (season_label, season_base_url) in enumerate(season_urls, 1):
-                print(f"\n    [Season {s_idx}/{len(season_urls)}] {season_label}")
+                print(f"\n    [Season {s_idx}/{len(seasons_to_process)}] {season_label} "
+                      f"({'split' if is_split else 'calendar'})")
                 print(f"      URL: {season_base_url}")
 
-                # Results tab for historical seasons
+                # Results tab (primary for historical)
                 r_count = await extract_tab(
                     page, season_base_url, "results", conn,
                     league_id, season_label, country_code,
@@ -986,7 +1373,7 @@ async def enrich_single_league(context, league: Dict[str, Any], conn,
                 )
                 total_matches += r_count
 
-                # Fixtures tab (some historical seasons may still have upcoming fixtures)
+                # Fixtures tab (some past seasons still have future fixtures)
                 f_count = await extract_tab(
                     page, season_base_url, "fixtures", conn,
                     league_id, season_label, country_code,
@@ -1021,14 +1408,14 @@ async def main(limit: Optional[int] = None, offset: int = 0, reset: bool = False
         3. (default): Smart gap scan — only leagues with missing data
 
     Args:
-        limit: Max number of leagues to process (after offset)
-        offset: Number of leagues to skip from the start (0-indexed)
-        reset: Reset all leagues to unprocessed before starting
-        num_seasons: Number of past seasons to extract per league
-        all_seasons: If True, extract ALL available seasons
-        weekly: If True, only process leagues updated >7 days ago
+        limit:        Max number of leagues to process (after offset)
+        offset:       Number of leagues to skip from the start (0-indexed)
+        reset:        Reset all leagues to unprocessed before starting
+        num_seasons:  Number of past seasons to extract per league
+        all_seasons:  If True, extract ALL available seasons
+        weekly:       If True, only process leagues updated >7 days ago
         target_season: If set, extract ONLY the Nth most recent past season (1-indexed)
-        refresh: If True, re-process stale leagues (>7 days old)
+        refresh:      If True, re-process stale leagues (>7 days old)
     """
     print("\n" + "=" * 60)
     print("  FLASHSCORE LEAGUE ENRICHMENT -> SQLite")
@@ -1039,7 +1426,6 @@ async def main(limit: Optional[int] = None, offset: int = 0, reset: bool = False
     print(f"  [DB] Initialized at {os.path.abspath(conn.execute('PRAGMA database_list').fetchone()[2])}")
     
     # ── Drain Enrichment Queue (Invalid IDs / High Priority) ─────────────
-    # This must run before the main loop to ensure IDs are resolved for the subsequent scan
     await drain_enrichment_queue(conn)
 
     if reset:
@@ -1052,19 +1438,15 @@ async def main(limit: Optional[int] = None, offset: int = 0, reset: bool = False
 
     # ── Select leagues to process ────────────────────────────────────────
     if reset:
-        # Full reset: process everything
         leagues = get_unprocessed_leagues(conn)
         scan_mode = "FULL RESET"
     elif refresh or weekly:
-        # Stale refresh: leagues not updated in 7+ days
         leagues = get_stale_leagues(conn, days=7)
         scan_mode = "STALE REFRESH (>7 days)"
     else:
-        # Default: smart gap scan — leagues with missing critical data
         leagues = get_leagues_with_gaps(conn)
         scan_mode = "GAP SCAN (missing data)"
         
-        # If history enrichment is requested, also include leagues that need history
         if num_seasons > 0 or target_season is not None or all_seasons:
             from Data.Access.league_db import get_leagues_missing_seasons
             min_needed = num_seasons if num_seasons > 0 else 2
@@ -1073,7 +1455,6 @@ async def main(limit: Optional[int] = None, offset: int = 0, reset: bool = False
             
             history_leagues = get_leagues_missing_seasons(conn, min_seasons=min_needed)
             
-            # Merge and dedup
             existing_ids = {lg['league_id'] for lg in leagues}
             added_count = 0
             for lg in history_leagues:
@@ -1095,14 +1476,15 @@ async def main(limit: Optional[int] = None, offset: int = 0, reset: bool = False
     total = len(leagues)
     mode_label = "current season"
     if all_seasons:
-        mode_label = "ALL seasons"
+        mode_label = "ALL seasons (via archive)"
     elif num_seasons > 0:
-        mode_label = f"last {num_seasons} past seasons"
+        mode_label = f"last {num_seasons} past seasons (via archive)"
     elif target_season is not None:
         if target_season == 0:
             mode_label = "current season only"
         else:
-            mode_label = f"season offset #{target_season} only"
+            mode_label = f"season offset #{target_season} (via archive)"
+
     # ── Workload announcement ─────────────────────────────────────────────
     sync_interval = max(1, total // 5)  # 20% of total
     sync_checkpoints = set(range(sync_interval, total + 1, sync_interval))
@@ -1110,7 +1492,7 @@ async def main(limit: Optional[int] = None, offset: int = 0, reset: bool = False
     print(f"  [Sync]   Cloud sync every {sync_interval} leagues (20% checkpoints at: {sorted(sync_checkpoints)})")
     print(f"  [Workload] Leagues #{offset + 1} to #{offset + total}:")
 
-    # ── Ensure crest directories exist (from project root) ───────────────
+    # ── Ensure crest directories exist ───────────────────────────────────
     os.makedirs(os.path.join(BASE_DIR, LEAGUE_CRESTS_DIR), exist_ok=True)
     os.makedirs(os.path.join(BASE_DIR, TEAM_CRESTS_DIR), exist_ok=True)
 
@@ -1120,7 +1502,7 @@ async def main(limit: Optional[int] = None, offset: int = 0, reset: bool = False
         from Data.Access.sync_manager import SyncManager, TABLE_CONFIG
         sync_mgr = SyncManager()
     except Exception:
-        pass  # SyncManager not available (standalone mode or no Supabase)
+        pass
 
     completed_count = 0
 
@@ -1136,9 +1518,8 @@ async def main(limit: Optional[int] = None, offset: int = 0, reset: bool = False
             timezone_id="Africa/Lagos",
         )
 
-        # Process leagues with concurrency control + 20% sync checkpoints
         sem = asyncio.Semaphore(MAX_CONCURRENCY)
-        crash_counter = 0  # Track consecutive crashes to trigger context restart
+        crash_counter = 0
 
         async def _worker(league, idx):
             nonlocal completed_count, context, browser, crash_counter
@@ -1149,7 +1530,7 @@ async def main(limit: Optional[int] = None, offset: int = 0, reset: bool = False
                         num_seasons=num_seasons, all_seasons=all_seasons,
                         target_season=target_season,
                     )
-                    crash_counter = 0  # Reset on success
+                    crash_counter = 0
                 except Exception as e:
                     err_msg = str(e).lower()
                     if 'crashed' in err_msg or 'target closed' in err_msg:
@@ -1211,7 +1592,7 @@ async def main(limit: Optional[int] = None, offset: int = 0, reset: bool = False
                 OR current_season IS NULL OR current_season = '')"""
     ).fetchone()[0]
 
-    # 1. Resolve Immediate Gaps (Country Codes, Flags)
+    # 1. Resolve Immediate Gaps
     try:
         from Core.System.gap_resolver import GapResolver
         print("  [GapResolver] Resolving immediate gaps...")
@@ -1247,7 +1628,7 @@ async def main(limit: Optional[int] = None, offset: int = 0, reset: bool = False
     print(f"  Teams:    {team_count}")
     print(f"{'='*60}\n")
 
-    # 4. Update readiness cache (Section 2 - Scalability)
+    # 4. Update readiness cache
     try:
         from Core.System.data_readiness import check_leagues_ready, check_seasons_ready
         print("  [Cache] Updating readiness cache after enrichment...")
@@ -1265,7 +1646,6 @@ async def drain_enrichment_queue(conn):
     from Core.System.gap_resolver import GapResolver
     GapResolver._ensure_queue_table()
     
-    # Priority 1: Invalid IDs that block everything
     pending = conn.execute("""
         SELECT * FROM enrichment_queue 
         WHERE status = 'PENDING' AND priority = 1
@@ -1279,7 +1659,6 @@ async def drain_enrichment_queue(conn):
     from playwright.async_api import async_playwright
     
     async with async_playwright() as p:
-        # Using a slightly larger window and normal profile to avoid bot detection during search
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         
@@ -1295,9 +1674,7 @@ async def drain_enrichment_queue(conn):
             new_id = await resolve_id_via_search(context, table, lookup_key)
             
             if new_id:
-                # Update the target table
                 conn.execute(f"UPDATE {table} SET {col} = ? WHERE id = ?", (new_id, row_id))
-                # Mark as resolved
                 conn.execute("UPDATE enrichment_queue SET status = 'RESOLVED', resolved_at = ? WHERE id = ?", 
                              (datetime.now().isoformat(), item_id))
                 print(f"      [✓] RESOLVED: {new_id}")
@@ -1321,12 +1698,11 @@ async def resolve_id_via_search(context, table, lookup_key):
             name = lookup_key.get("league_name")
             country = lookup_key.get("country_name") or lookup_key.get("country_code")
             search_query = f"{country} {name}"
-        else: # teams
+        else:
             name = lookup_key.get("team_name")
             country = lookup_key.get("country_code")
             search_query = f"{name} {country}"
             
-        # 1. Search Flashscore
         await page.goto(f"https://www.flashscore.com/search/?q={search_query.replace(' ', '+')}", timeout=60000)
         
         try:
@@ -1334,7 +1710,6 @@ async def resolve_id_via_search(context, table, lookup_key):
         except:
             return None
         
-        # 2. Extract ID
         selector = ".search__section--leagues a" if table == "leagues" else ".search__section--participant a"
         first_match = await page.query_selector(selector)
         
@@ -1364,8 +1739,8 @@ if __name__ == "__main__":
                         help="Number of past seasons to extract (e.g. 5 = last 5 past seasons)")
     parser.add_argument("--season", type=int, default=None,
                         metavar='N',
-                        help='Season offset: 0=current, 1=most recent past, 2=second past, etc.')
-    parser.add_argument("--all-seasons", action="store_true", help="Extract all available seasons")
+                        help='Season offset: 0=current, 1=most recent past, 2=second past, etc. Uses /archive/ for correct URL.')
+    parser.add_argument("--all-seasons", action="store_true", help="Extract all available seasons (via /archive/)")
     args = parser.parse_args()
 
     # Parse --limit: single int or range "START-END"

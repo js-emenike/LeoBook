@@ -245,10 +245,19 @@ async def _league_worker(
                 if not home or not away:
                     continue
 
-                candidates = [
+                # Normalise key names before passing to the resolver.
+                # extract_league_matches() returns dicts with 'home'/'away' keys,
+                # but GrokMatcher.resolve_with_cascade() reads 'home_team'/'away_team'.
+                # Adding both aliases here means neither side needs to change.
+                raw_candidates = [
                     m for m in all_page_matches
                     if not fix_date or m.get('date', '') == fix_date
                 ] or all_page_matches
+
+                candidates = [
+                    {**m, 'home_team': m.get('home', ''), 'away_team': m.get('away', '')}
+                    for m in raw_candidates
+                ]
 
                 extraction_pairs.append({
                     'fs_fix': fs_fix,

@@ -2,10 +2,12 @@
 # Part of LeoBook Modules — FootballCom
 #
 # Classes: GrokMatcher
-# Restored from bytecode (CPython 3.13) — original removed during modularisation.
+# Cascade: search_dict (exact alias) → Gemini LLM fallback.
+# Fuzzy removed (RULEBOOK §1 first principles — search_dict is sufficient
+# once leagues are matched; fuzzy adds noise not accuracy).
+# Grok removed (retired model, not cost-effective).
 
 import os
-import re
 import json
 import sqlite3
 import asyncio
@@ -14,115 +16,17 @@ from typing import List, Dict, Optional, Tuple, Set
 _session_dead_models: Set[str] = set()
 
 try:
-    from Levenshtein import distance, ratio
-except ImportError:
-    # Fallback: pure-Python implementation using difflib
-    import difflib
-    def distance(a: str, b: str) -> int:
-        """Levenshtein edit distance fallback via SequenceMatcher."""
-        max_len = max(len(a), len(b), 1)
-        sim = difflib.SequenceMatcher(None, a, b).ratio()
-        return int(round(max_len * (1 - sim)))
-
-    def ratio(a: str, b: str) -> float:
-        """Similarity ratio fallback via SequenceMatcher."""
-        return difflib.SequenceMatcher(None, a, b).ratio()
-
-try:
     from google import genai
     from google.genai import types
     HAS_GEMINI = True
 except ImportError:
     HAS_GEMINI = False
 
-# Noise tokens to strip from team names before comparison
-_NOISE = re.compile(
-    r'\b(?:fc|sc|sk|cf|afc|bsc|fk|nk|cd|ud|rc|rcd|og|de|del|von|und'
-    r'|sport(?:ing)?|club|athletic|athletico|association|\d{4})\b',
-    re.IGNORECASE
-)
-_MULTI_SPACE = re.compile(r'\s+')
-
-
-def _normalize(name: str) -> str:
-    """Lowercase, strip noise tokens, collapse whitespace."""
-    result = name.lower()
-    result = _NOISE.sub('', result)
-    result = _MULTI_SPACE.sub(' ', result).strip()
-    return result
-
-
-def _tokenize(name: str) -> List[str]:
-    """Split normalized name into tokens."""
-    return _normalize(name).split()
-
-
-def _acronym_match(short: str, long: str) -> bool:
-    """Return True if `short` is the acronym of `long`."""
-    long_tokens = _tokenize(long)
-    initials = ''.join(t[0] for t in long_tokens if t)
-    return short.lower() == initials.lower()
-
-
-def _best_token_lev(token: str, tokens: List[str]) -> float:
-    """Return best Levenshtein similarity between `token` and any token in `tokens`."""
-    best = 0.0
-    for t in tokens:
-        shorter = token if len(token) <= len(t) else t
-        longer  = t     if len(token) <= len(t) else token
-        if len(longer) == 0:
-            continue
-        sim = 1.0 - distance(shorter, longer) / len(longer)
-        if sim > best:
-            best = sim
-    return best
-
-
-def _team_score(fs_team: str, fb_team: str) -> float:
-    """
-    Composite similarity score between two team name strings.
-    Returns a float in [0, 1]. Higher = better match.
-    """
-    fs_n = _normalize(fs_team)
-    fb_n = _normalize(fb_team)
-
-    if not fs_n or not fb_n:
-        return 0.0
-
-    # Direct substring
-    if fs_n in fb_n or fb_n in fs_n:
-        return 0.92
-
-    # Acronym check
-    if _acronym_match(fs_n, fb_n) or _acronym_match(fb_n, fs_n):
-        return 0.88
-
-    # Character-level Levenshtein ratio
-    lev = ratio(fs_n, fb_n)
-
-    # Token-level Jaccard + best-token-Levenshtein
-    fs_tok = set(_tokenize(fs_team))
-    fb_tok = set(_tokenize(fb_team))
-    intersection = fs_tok & fb_tok
-    union = fs_tok | fb_tok
-    jaccard = len(intersection) / max(len(union), 1)
-
-    shorter_set = fs_tok if len(fs_tok) <= len(fb_tok) else fb_tok
-    longer_set  = fb_tok if len(fs_tok) <= len(fb_tok) else fs_tok
-    token_scores = [_best_token_lev(t, list(longer_set)) for t in shorter_set]
-    token_avg = sum(token_scores) / max(len(token_scores), 1)
-
-    # Substring bonus
-    shorter = fs_n if len(fs_n) <= len(fb_n) else fb_n
-    longer  = fb_n if len(fs_n) <= len(fb_n) else fs_n
-    substr  = 0.15 if shorter in longer else 0.0
-
-    return max(lev * 0.4 + jaccard * 0.3 + token_avg * 0.2 + substr, 0.0)
-
-
 class GrokMatcher:
     """
-    Cascade resolver: search_terms → fuzzy → LLM (Gemini).
+    2-stage cascade resolver: search_dict (exact alias) → Gemini LLM.
+    Fuzzy removed: once leagues are matched, search_dict aliases are
+    sufficient. Fuzzy added noise, not accuracy (RULEBOOK §1 first principles).
     Imported by fb_manager.py for Chapter 1 Page 1 resolution.
     """
 
@@ -155,21 +59,22 @@ class GrokMatcher:
 
     def _auto_learn(self, conn: sqlite3.Connection, team_id: Optional[str], new_alias: str) -> None:
         """Persist a newly discovered alias into search_dict for future sessions."""
-        if not team_id or not conn:
+        if not team_id or not conn or not new_alias:
             return
         try:
-            normalized_alias = _normalize(new_alias)
+            alias_lower = new_alias.strip().lower()
             terms = self._get_search_terms(conn, team_id)
-            if normalized_alias not in [_normalize(t) for t in terms]:
-                terms.append(new_alias)
+            if alias_lower not in [t.strip().lower() for t in terms]:
+                terms.append(new_alias.strip())
                 conn.execute(
                     "INSERT INTO search_dict (team_id, search_terms) VALUES (?, ?) "
                     "ON CONFLICT(team_id) DO UPDATE SET search_terms = excluded.search_terms",
                     (team_id, json.dumps(terms))
                 )
                 conn.commit()
-        except Exception as e:
+        except Exception:
             pass  # Non-critical
+
 
     async def resolve_with_cascade(
         self,
@@ -178,10 +83,9 @@ class GrokMatcher:
         conn: sqlite3.Connection,
     ) -> Tuple[Optional[Dict], float, str]:
         """
-        3-stage cascade:
-          1. search_terms — exact alias lookup from search_dict table
-          2. fuzzy — Levenshtein/Jaccard scoring, threshold 0.72
-          3. llm — Gemini pro fallback for ambiguous cases
+        2-stage cascade:
+          1. search_dict — exact alias lookup (sufficient once league is matched)
+          2. llm — Gemini fallback for genuinely ambiguous team names
 
         Returns: (best_match_dict, score, method_str)
         """
@@ -196,122 +100,48 @@ class GrokMatcher:
         if not home or not away:
             return None, 0.0, 'failed'
 
-        # ── Stage 1: search_terms ────────────────────────────────────────────
+        # ── Stage 1: search_dict ─────────────────────────────────────────────
         home_terms = self._get_search_terms(conn, home_id)
         away_terms = self._get_search_terms(conn, away_id)
-        h_norm = [_normalize(t) for t in [home] + home_terms]
-        a_norm = [_normalize(t) for t in [away] + away_terms]
+        # Include the raw FS name as a candidate alias
+        h_aliases = [home.lower()] + [t.lower() for t in home_terms]
+        a_aliases = [away.lower()] + [t.lower() for t in away_terms]
 
         for m in fb_matches:
-            fb_h = _normalize(self._get_name(m, 'home'))
-            fb_a = _normalize(self._get_name(m, 'away'))
-            h_match = fb_h in h_norm or any(fb_h in t for t in h_norm)
-            a_match = fb_a in a_norm or any(fb_a in t for t in a_norm)
+            fb_h = self._get_name(m, 'home').lower()
+            fb_a = self._get_name(m, 'away').lower()
+            h_match = fb_h in h_aliases or any(fb_h in alias for alias in h_aliases)
+            a_match = fb_a in a_aliases or any(fb_a in alias for alias in a_aliases)
             if h_match and a_match:
+                # Auto-learn fb name as alias for future sessions
+                self._auto_learn(conn, home_id, self._get_name(m, 'home'))
+                self._auto_learn(conn, away_id, self._get_name(m, 'away'))
                 return {**m, 'matched': True}, 0.98, 'search_terms'
 
-        # ── Stage 2: fuzzy ───────────────────────────────────────────────────
-        best_fuzzy: Optional[Dict] = None
-        fuzzy_score = 0.0
-        final_home = home
-        final_away = away
-
-        for m in fb_matches:
-            fb_h = self._get_name(m, 'home')
-            fb_a = self._get_name(m, 'away')
-            home_s = _team_score(home, fb_h)
-            away_s = _team_score(away, fb_a)
-            score = (home_s + away_s) / 2.0
-            if score > fuzzy_score:
-                fuzzy_score = score
-                best_fuzzy = m
-                final_home = fb_h
-                final_away = fb_a
-
-        if best_fuzzy and fuzzy_score >= 0.72:
-            self._auto_learn(conn, home_id, final_home)
-            self._auto_learn(conn, away_id, final_away)
-            return {**best_fuzzy, 'matched': True}, fuzzy_score, 'fuzzy'
-
-        # ── Stage 3: LLM (Gemini) ────────────────────────────────────────────
+        # ── Stage 2: Gemini LLM ──────────────────────────────────────────────
         llm_match, llm_score = await self._llm_resolve(
             f"{home} vs {away}", fb_matches
         )
         if llm_match:
+            # Auto-learn the LLM-resolved alias so next session uses search_dict
+            self._auto_learn(conn, home_id, self._get_name(llm_match, 'home'))
+            self._auto_learn(conn, away_id, self._get_name(llm_match, 'away'))
             return {**llm_match, 'matched': True}, llm_score, 'llm'
 
         return None, 0.0, 'failed'
 
-    def resolve(
-        self,
-        fs_name: str,
-        fb_matches: List[Dict],
-    ) -> Tuple[Optional[Dict], float, str]:
-        """Synchronous fuzzy-only resolve (legacy / test use)."""
-        res, score, _ = asyncio.get_event_loop().run_until_complete(
-            self.resolve_with_cascade(
-                {'home_team_name': fs_name.split(' vs ')[0] if ' vs ' in fs_name else fs_name,
-                 'away_team_name': fs_name.split(' vs ')[1] if ' vs ' in fs_name else ''},
-                fb_matches,
-                None,
-            )
-        )
-        return res, score, _
-
-    def _fuzzy_resolve(
-        self,
-        fs_name: str,
-        fb_matches: List[Dict],
-    ) -> Tuple[Optional[Dict], float, str]:
-        """Direct fuzzy resolve without search_terms or LLM stages."""
-        fs_raw = fs_name
-        sep = ' vs ' if ' vs ' in fs_raw else ' - '
-        parts = fs_raw.split(sep, 1)
-        fs_home_raw = parts[0].strip() if len(parts) >= 2 else fs_raw
-        fs_away_raw = parts[1].strip() if len(parts) >= 2 else ''
-
-        best_match: Optional[Dict] = None
-        best_score = 0.0
-
-        for m in fb_matches:
-            fb_home = self._get_name(m, 'home')
-            fb_away = self._get_name(m, 'away')
-            home_s = _team_score(fs_home_raw, fb_home)
-            away_s = _team_score(fs_away_raw, fb_away) if fs_away_raw else home_s
-            score = (home_s + away_s) / 2.0
-            if score > best_score:
-                best_score = score
-                best_match = m
-
-        if best_match and best_score >= 0.65:
-            return best_match, best_score, 'fuzzy'
-
-        if best_match:
-            candidate = best_match
-            max_len = max(len(fs_home_raw), 1)
-            dist = distance(_normalize(fs_home_raw), _normalize(self._get_name(best_match, 'home')))
-            if dist < max_len * 0.4:
-                return candidate, best_score, 'fuzzy'
-
-        return None, 0.0, 'failed'
 
     async def _llm_resolve(
         self,
         fs_name: str,
         fb_matches: List[Dict],
     ) -> Tuple[Optional[Dict], float]:
-        """Gemini-based resolver as final fallback for ambiguous matches."""
+        """Gemini LLM fallback for genuinely ambiguous team name matches.
+        Each model's error is isolated — one model's failure never kills others.
+        Grok removed: retired model, not cost-effective (RULEBOOK §1 first principles).
+        """
         if not HAS_GEMINI:
             return None, 0.0
-
-        fallback_match: Optional[Dict] = None
-        fallback_score = 0.0
-
-        try:
-            from Core.Intelligence.aigo_suite import AIGOSuite
-            health_manager = AIGOSuite.get_health_manager()
-        except Exception:
-            health_manager = None
 
         candidates = []
         for i, m in enumerate(fb_matches[:8]):
@@ -329,14 +159,15 @@ class GrokMatcher:
             + '\n\nReply with the index number ONLY of the best match, or -1 if none fits.'
         )
 
+        # Gemini only — each model isolated, one 400/quota never kills others
         model_chain = ['gemini-2.0-flash-lite', 'gemini-1.5-flash-8b', 'gemini-2.0-flash']
+        api_key = os.environ.get('GEMINI_API_KEY', '')
+        if not api_key:
+            return None, 0.0
 
         for model_name in model_chain:
             if model_name in _session_dead_models:
                 continue
-            api_key = os.environ.get('GEMINI_API_KEY', '')
-            if not api_key:
-                break
             try:
                 client = genai.Client(api_key=api_key)
                 response = client.models.generate_content(
@@ -349,27 +180,21 @@ class GrokMatcher:
                 )
                 answer = (response.text or '').strip()
                 try:
-                    i = int(answer)
-                    if 0 <= i < len(fb_matches):
-                        cand = fb_matches[i]
-                        return cand, 0.80
+                    idx = int(answer)
+                    if 0 <= idx < len(fb_matches):
+                        return fb_matches[idx], 0.80
                 except ValueError:
                     pass
-                break  # Got a response, but it wasn't a valid index — stop trying
+                # Got a parseable response but invalid index — this model works, stop
+                break
             except Exception as e:
                 err_str = str(e).lower()
                 if 'quota' in err_str or '429' in err_str:
-                    # Rate limited — mark this model dead, try the next one
+                    # Rate-limited — mark dead, try next model
                     _session_dead_models.add(model_name)
-                elif ('400' in err_str or 'bad request' in err_str
-                      or 'invalid' in err_str or 'unsupported' in err_str
-                      or 'malformed' in err_str):
-                    # Request format rejected — all models share same SDK/payload,
-                    # so retrying others will also fail. Kill LLM for whole session.
-                    _session_dead_models.update(model_chain)
-                    break
                 else:
-                    # Unknown error — skip this model only
+                    # Any other error (400, 500, timeout) — skip this model only,
+                    # do NOT kill the rest of the chain
                     _session_dead_models.add(model_name)
 
-        return fallback_match, fallback_score
+        return None, 0.0

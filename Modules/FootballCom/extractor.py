@@ -25,166 +25,76 @@ async def _activate_and_wait_for_matches(
     expected_count: int = 0,
 ) -> bool:
     """
-    Triggers lazy-load hydration on football.com tournament pages
-    by scrolling before waiting for match card selectors.
+    Hydrates a football.com tournament page and waits for match cards.
+    Uses the proven stability-polling scroll from fs_league_hydration
+    (RULEBOOK §2.16 — Reuse First) instead of fixed-time budgets.
 
-    Returns True if match cards found, False if page is genuinely empty or has no upcoming games.
+    Returns True if cards found, False if page is genuinely empty.
     """
-    # Phase 0: Check for "No upcoming games" message early
+    from Modules.Flashscore.fs_league_hydration import _scroll_to_load
+
+    # Football.com match card selector (non-skeleton only)
+    CARD_SEL = (
+        "section.match-card:not(.skeleton), "
+        "div.match-card:not(.skeleton), "
+        "[class*='match-card']:not([class*='skeleton'])"
+    )
+
+    # Phase 0: early exit — "No upcoming games" indicators
     NO_DATA_SELECTORS = [
         ".match-card-error-message",
         ".flex-column.no-data",
         ".match-cards-wrapper-adaptor:has-text('no upcoming games')",
     ]
-    
-    # Phase 1: Deep Hydration (Wait for Tabs & Initial Content)
-    try:
-        # Sometimes tabs are inside a skeleton or lazy-loaded
-        for i in range(3):
-            # Early exit if "No games" message appears
-            for sel in NO_DATA_SELECTORS:
-                if await page.locator(sel).count() > 0:
-                    print(f"    [Extractor] Info: League page indicates no upcoming matches.")
-                    return False
-
-            tab_locators = page.locator("li.m-snap-nav-item")
-            count = await tab_locators.count()
-            if count > 0:
-                # Try to switch to 'All' or 'Results' if we see 'Upcoming'
-                for j in range(count):
-                    tab = tab_locators.nth(j)
-                    text = (await tab.inner_text()).lower()
-                    if any(x in text for x in ["all", "result", "finish"]):
-                        print(f"    [Extractor] Switching to '{text.strip()}' tab...")
-                        await tab.click(force=True)
-                        await asyncio.sleep(2.0)
-                        break
-                break
-            else:
-                await page.evaluate("window.scrollBy(0, 200)")
-                await asyncio.sleep(0.8)
-    except Exception:
-        pass
-
-    # Dynamic wait — fires after DOM is active (Phase 1 complete),
-    # before scroll begins (Phase 2). At this point domcontentloaded
-    # has fired AND tab structure is confirmed present. We now wait
-    # for the card renderer to populate before scrolling.
-    # Formula: base 1.0s + 0.25s per expected fixture, cap 5.0s
-    # 2 fixtures→1.5s | 6→2.5s | 10→3.5s | 16+→5.0s
-    # FIX: when expected_count is 0 (unknown), use a minimal 1.0s base wait
-    #      instead of the full formula, to avoid 231× 1.0s sleeps for empty leagues.
-    _pre_scroll_wait = min(1.0 + (expected_count * 0.25), 5.0) if expected_count > 0 else 1.0
-    await asyncio.sleep(_pre_scroll_wait)
-
-    # Phase 2: Incremental scroll to trigger match card hydration
-    try:
-        scroll_positions = [400, 800, 1500]
-        for pos in scroll_positions:
-            await page.evaluate(f"window.scrollTo(0, {pos})")
-            await asyncio.sleep(1)
-        await page.evaluate("window.scrollTo(0, 0)")
-        await asyncio.sleep(0.5)
-    except Exception:
-        pass
-
-    # Phase 3: Now wait for cards to appear
-    REAL_CARD_SELECTOR = "section.match-card:not(.skeleton), div.match-card:not(.skeleton), [class*='match-card']:not([class*='skeleton'])"
-    
-    # FIX: reduce per-attempt timeout from 5000ms to 2500ms for empty-league fast exit.
-    # 3 attempts × 2.5s = 7.5s max vs old 3 × 5s = 15s, for genuinely empty leagues.
-    CARD_WAIT_TIMEOUT = 2500
-
-    for attempt in range(3):
-        # Final check for "No games" before timing out
-        for sel in NO_DATA_SELECTORS:
-            if await page.locator(sel).count() > 0:
-                return False
-
+    for sel in NO_DATA_SELECTORS:
         try:
-            # Phase 1: confirm DOM is alive (any card present)
-            await page.wait_for_selector(
-                REAL_CARD_SELECTOR, state="visible", timeout=CARD_WAIT_TIMEOUT
-            )
-
-            # Phase 2: poll until card count reaches expected_count
-            # or timeout (scaled by fixture count)
-            POLL_INTERVAL = 0.4
-            
-            # SCALED HYDRATION: Give larger leagues more time to render.
-            # Base 8.0s + 0.5s per fixture, capped at 25s.
-            POLL_TIMEOUT = max(8.0, min(25.0, expected_count * 0.5)) if expected_count > 0 else 8.0
-            
-            _elapsed = 0.0
-            _found = 0
-
-            while _elapsed < POLL_TIMEOUT:
-                _found = await page.evaluate(f"""() => {{
-                    const cards = document.querySelectorAll(
-                        "section.match-card:not(.skeleton), "
-                        + "div.match-card:not(.skeleton), "
-                        + "[class*='match-card']:not([class*='skeleton'])"
-                    );
-                    let count = 0;
-                    for (const c of cards) {{
-                        if (c.innerText && c.innerText.trim().length > 20)
-                            count++;
-                    }}
-                    return count;
-                }}""")
-
-                if expected_count == 0 or _found >= expected_count:
-                    break   # All expected cards are hydrated (or no expectation set)
-
-                await asyncio.sleep(POLL_INTERVAL)
-                _elapsed += POLL_INTERVAL
-
-            if expected_count > 0 and _found < expected_count:
-                # Recovery scroll: one extra deep pass if yield < 60%
-                if _found < expected_count * 0.6:
-                    try:
-                        for pos in [2000, 3500, 0]:
-                            await page.evaluate(f"window.scrollTo(0, {pos})")
-                            await asyncio.sleep(0.8)
-                        # Re-poll for up to 4 more seconds
-                        _extra_elapsed = 0.0
-                        while _extra_elapsed < 4.0:
-                            _found = await page.evaluate("""() => {
-                                const cards = document.querySelectorAll(
-                                    "section.match-card:not(.skeleton), "
-                                    + "div.match-card:not(.skeleton), "
-                                    + "[class*='match-card']:not([class*='skeleton'])"
-                                );
-                                let count = 0;
-                                for (const c of cards) {
-                                    if (c.innerText && c.innerText.trim().length > 20) count++;
-                                }
-                                return count;
-                            }""")
-                            if _found >= expected_count:
-                                break
-                            await asyncio.sleep(0.4)
-                            _extra_elapsed += 0.4
-                    except Exception:
-                        pass
-
-                print(
-                    f"    [Extractor] Partial hydration: "
-                    f"{_found}/{expected_count} cards after "
-                    f"{POLL_TIMEOUT:.1f}s — proceeding with what's available."
-                )
-            else:
-                print(
-                    f"    [Extractor] {_found}/{expected_count if expected_count else '?'} cards OK "
-                    f"({POLL_TIMEOUT:.1f}s budget)."
-                )
-            return True
-
+            if await page.locator(sel).count() > 0:
+                print("    [Extractor] Info: League page indicates no upcoming matches.")
+                return False
         except Exception:
-            await page.evaluate("window.scrollBy(0, 600)")
-            await asyncio.sleep(1.0)
+            pass
 
-    return False
+    # Phase 1: tab switch — activate "All" tab if present
+    try:
+        tab_locators = page.locator("li.m-snap-nav-item")
+        count = await tab_locators.count()
+        for j in range(count):
+            tab = tab_locators.nth(j)
+            text = (await tab.inner_text()).lower()
+            if any(x in text for x in ["all", "result", "finish"]):
+                await tab.click(force=True)
+                await asyncio.sleep(1.5)
+                break
+    except Exception:
+        pass
+
+    # Phase 2: stability-polling scroll (proven, reused from fs_league_hydration)
+    # _scroll_to_load scrolls one full viewport per step, polls every 0.4s,
+    # stops when count is stable for 2s or DOM bottom reached.
+    found = await _scroll_to_load(page, CARD_SEL)
+
+    # Phase 3: result
+    if expected_count > 0 and found < expected_count:
+        print(
+            f"    [Extractor] Partial hydration: "
+            f"{found}/{expected_count} cards — proceeding."
+        )
+    elif found == 0:
+        # Re-check for "no games" message (may have loaded after scroll)
+        for sel in NO_DATA_SELECTORS:
+            try:
+                if await page.locator(sel).count() > 0:
+                    print("    [Extractor] Info: League page indicates no upcoming matches.")
+                    return False
+            except Exception:
+                pass
+        return False
+    else:
+        print(
+            f"    [Extractor] {found}/{expected_count if expected_count else '?'} "
+            f"cards hydrated."
+        )
+    return True
 
 
 async def dismiss_overlays(page: Page) -> int:

@@ -3,7 +3,7 @@
 **Developer**: Materialless LLC
 **Chief Engineer**: Emenike Chinenye James
 **Powered by**: Rule Engine + Neural RL Stairway Engine · Gemini Multi-Key (AIGO browser assistant + search enrichment only)
-**Architecture**: v9.1 "Stairway Engine" (All files ≤500 lines · Fully Modular · Season-Aware RL Weighting)
+**Architecture**: v9.3 "Stairway Engine" (All files ≤500 lines · Fully Modular · Season-Aware RL Weighting · Streamer Independence)
 
 ---
 
@@ -22,7 +22,7 @@ For the complete file inventory and step-by-step execution trace, see [docs/LeoB
 
 ---
 
-## System Architecture (v9.1 — Fully Modular)
+## System Architecture (v9.3 — Fully Modular · Streamer Independent)
 
 ```
 Leo.py (Entry Point — 469 lines)
@@ -39,7 +39,9 @@ Leo.py (Entry Point — 469 lines)
 │   └── Chapter 2 (Betting Automation):
 │       ├── Ch2 P1: Automated Booking
 │       └── Ch2 P2: Funds & Withdrawal Check
-└── Live Streamer: Isolated parallel task (60s updates + outcome review)
+└── Live Streamer: **Independent OS process** — spawned via `subprocess.Popen(start_new_session=True)`
+                   Cannot be stopped by Leo.py. Kill: `pkill -f fs_live_streamer` (Linux/Mac)
+                   or `taskkill /F /PID <PID>` (Windows)
 ```
 
 ### Key Subsystems
@@ -49,7 +51,8 @@ Leo.py (Entry Point — 469 lines)
 - **Season Completeness**: `CUP_FORMAT` status eliminates phantom COMPLETED seasons from cup finals/super cups. `data_richness_score` per league measures prior season depth.
 - **Season-Aware RL Weighting**: `data_richness_score` [0.0, 1.0] scales `W_neural` dynamically. 0 prior seasons → `W_neural = 0.0` (pure Rule Engine). 3+ seasons → `W_neural = 0.3` (full configured weight). Score cached for 6h.
 - **Standings VIEW**: High-performance standings computed directly from `schedules` via Postgres UNION ALL views. Zero storage, always fresh.
-- **Data Leak Guard**: Max 1 prediction per team per week. Prevents predicting future matches before prerequisite results are known.
+- **Batch Resume Checkpoint**: `fb_manager.py` saves `Data/Logs/batch_checkpoint.json` after each league batch. Restart skips already-completed batches.
+- **Supabase Upsert Limits**: `predictions` capped at 200 rows/call (prevents 57014 timeout). `paper_trades.league_id` is `TEXT` (Flashscore IDs are strings — not integers).
 - **Neural RL Engine** (`Core/Intelligence/rl/`): v9.1 "Stairway Engine" using a **30-dimensional action space** and **Poisson-grounded imitation learning**. 3-phase PPO training split across `trainer.py`, `trainer_phases.py`, `trainer_io.py`.
 
 ### Core Modules
@@ -105,20 +108,17 @@ LeoBook/
 │   │   ├── fs_league_extractor.py  # NEW v9.1
 │   │   ├── fs_league_hydration.py  # NEW v9.1
 │   │   ├── fs_league_images.py     # NEW v9.1
-│   │   ├── fs_live_streamer.py
-│   │   ├── fs_extractor.py
-│   │   └── fs_utils.py
+│   │   ├── fs_live_streamer.py     # Independent process (v9.3 — subprocess.Popen)
+│   │   └── fs_extractor.py         # Live streamer depends on this — do NOT delete
 │   ├── FootballCom/
-│   │   ├── fb_manager.py
+│   │   ├── fb_manager.py           # Batch resume checkpoint (v9.3)
+│   │   ├── match_resolver.py       # GrokMatcher — 3-stage cascade (v9.3 restored)
 │   │   ├── navigator.py
 │   │   ├── odds_extractor.py
 │   │   └── booker/
 │   │       ├── placement.py
 │   │       └── booking_code.py
-│   └── Assets/
-│       ├── asset_manager.py        # Reads from SQLite (v9.1 — CSV removed)
-│       ├── football_logos.py       # NEW v9.1 (was Scripts/football_logos.py)
-│       └── logo_downloader.py      # NEW v9.1
+│   # NOTE: football_logos.py + logo_downloader.py live in Data/Access/ (not Modules/Assets/)
 ├── Data/
 │   ├── Access/
 │   │   ├── league_db.py            # Façade (1092 lines)
@@ -128,8 +128,8 @@ LeoBook/
 │   │   ├── paper_trade_helpers.py  # NEW v9.1
 │   │   ├── gap_scanner.py          # 424 lines
 │   │   ├── gap_models.py           # NEW v9.1 — ColumnSpec, GapReport
-│   │   ├── sync_manager.py         # 470 lines
-│   │   ├── sync_schema.py          # NEW v9.1 — TABLE_CONFIG, _COL_REMAP
+│   │   ├── sync_manager.py         # force_full=False default (v9.3), tqdm bypass
+│   │   ├── sync_schema.py          # _BATCH_SIZES: predictions=200, paper_trades.league_id=TEXT
 │   │   ├── season_completeness.py  # CUP_FORMAT + data_richness_score (v9.1)
 │   │   ├── supabase_client.py
 │   │   ├── metadata_linker.py
@@ -162,7 +162,7 @@ The app implements a **Telegram-inspired high-density aesthetic** optimized for 
 
 ---
 
-## Quick Start (v9.1)
+## Quick Start (v9.3)
 
 ### Backend (Leo.py)
 
@@ -205,6 +205,12 @@ python -m Modules.Assets.asset_manager --flags
 #### Emergency Controls
 
 ```bash
+# Stop the live streamer (Ctrl+C does NOT work — it runs in a detached process)
+# Linux / macOS / Codespaces:
+pkill -f fs_live_streamer
+# Windows (PowerShell):
+Get-WmiObject Win32_Process | Where-Object {$_.CommandLine -like "*fs_live_streamer*"} | ForEach-Object { taskkill /F /PID $_.ProcessId }
+
 # Create kill switch (immediately halts all betting)
 echo stop > STOP_BETTING
 
@@ -238,16 +244,16 @@ python -c "from Core.System.guardrails import StaircaseTracker; print(StaircaseT
 
 | Document | Purpose |
 | -------- | ------- |
-| [docs/RULEBOOK.md](docs/RULEBOOK.md) | **MANDATORY** — Engineering standards & philosophy |
+| [docs/RULEBOOK.md](docs/RULEBOOK.md) | **MANDATORY** — Engineering standards & philosophy (v9.3) |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | Chapter/page file dependency map + commit history (v9.3) |
 | [docs/PROJECT_STAIRWAY.md](docs/PROJECT_STAIRWAY.md) | Capital compounding strategy — the "why" behind LeoBook |
-| [docs/LeoBook_Technical_Master_Report.md](docs/LeoBook_Technical_Master_Report.md) | File inventory, execution flow, safety guardrails, observability |
+| [docs/LeoBook_Technical_Master_Report.md](docs/LeoBook_Technical_Master_Report.md) | File inventory, execution flow, safety guardrails |
 | [docs/leobook_algorithm.md](docs/leobook_algorithm.md) | Algorithm reference (Rule Engine + Neural RL) |
 | [docs/AIGO_Learning_Guide.md](docs/AIGO_Learning_Guide.md) | Self-healing extraction pipeline |
 | [docs/SUPABASE_SETUP.md](docs/SUPABASE_SETUP.md) | Supabase schema, storage buckets, deployed views |
 | [docs/RL_First_Principles_Data_Audit.md](docs/RL_First_Principles_Data_Audit.md) | RL data readiness audit + tier advancement guide |
-| [docs/reports archive/LEOBOOK_FILE_MAP.md](docs/reports%20archive/LEOBOOK_FILE_MAP.md) | Chapter/page file dependency map (v9.1) |
 
 ---
 
-*Last updated: 2026-03-15 — v9.1 "Stairway Engine" — Fully modular, season-aware RL, 14 bugs fixed*
+*Last updated: 2026-03-15 — v9.3 "Stairway Engine" — Streamer independence, batch resume, Supabase upsert fixes, hydration recovery scroll*
 *LeoBook Engineering Team — Materialless LLC*

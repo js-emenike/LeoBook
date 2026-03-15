@@ -287,7 +287,7 @@
 - `Leo.py` spawns `python -m Modules.Flashscore.fs_live_streamer` via `subprocess.Popen(start_new_session=True)`
 - `Core/System/supervisor.py` uses same Popen pattern — streamer is NOT a coroutine task
 - Heartbeat guard: skips spawn if streamer already alive (file modified < 30 min ago)
-- **Cannot be stopped by Leo.py** — only manual kill/Ctrl+C
+- **Cannot be stopped by Leo.py or Ctrl+C** — use `pkill -f fs_live_streamer` (Linux/Mac/Codespaces) or `taskkill /F /PID <PID>` (Windows)
 - Standalone: `python -m Modules.Flashscore.fs_live_streamer`
 
 **Catch-up logic (all 7 requirements implemented):**
@@ -308,14 +308,6 @@
 | `Data/Access/db_helpers.py` | `fill_all_country_codes()` — Pass 1 (name lookup) + Pass 2 (club cross-ref) |
 | `Data/Access/gap_scanner.py` | `GapScanner` |
 | `Data/Access/gap_models.py` | `GapReport` |
-
-### `--streamer`
-| File | Role |
-|---|---|
-| `Modules/Flashscore/fs_live_streamer.py` | `live_score_streamer()` |
-| `Modules/Flashscore/fs_extractor.py` | Score extraction |
-| `Data/Access/league_db.py` | `upsert_live_score()` |
-| `Data/Access/sync_manager.py` | Delta sync |
 
 ### `--recommend`
 | File | Role |
@@ -461,7 +453,14 @@ Flutter app converts WAT → user local timezone in the app layer.
 | DB-only | Stale crest NULL + sync (no code change) |
 | pending | Rotating segmented log system — `RotatingSegmentLogger`, `LogSync`, `TZ_NG_NAME` |
 | pending | Complete modularisation (Prompts 6+9) + dead code removal (6 files) |
-| `61856dc` | Streamer independence + WAT fix across 3 files |
+| `9c55776` | **v9.3** Fix: restore `match_resolver.py` to `Modules/FootballCom/` (Ch1P1 FATAL) |
+| `315c376` | **v9.3** Fix: P2 cache `KeyError` + `_CACHE_SCHEMA_VERSION = "9.3"` |
+| `e860801` | **v9.3** Fix: `sync_on_startup force_full=False` (44s startup penalty) + tqdm bypass |
+| `b86a508` | **v9.3** Feat: version card in session logs + `TZ_NG_NAME` top-level import |
+| `c9f29ce` | **v9.3** Fix: `predictions` batch 200 (57014 timeout) + `paper_trades.league_id` TEXT (22P02) |
+| `5c9e448` | **v9.3** Fix: adaptive hydration recovery scroll + suppress scroll/wait log noise |
+| `20c4d88` | **v9.3** Feat: batch resume checkpoint — restart picks up from last completed batch |
+| `5a06755` | **v9.3** Fix: correct misleading SearchDict log line in Ch1P1 |
 
 ---
 

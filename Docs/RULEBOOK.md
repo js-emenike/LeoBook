@@ -1,4 +1,4 @@
-# LeoBook Developer RuleBook v9.1
+# LeoBook Developer RuleBook v9.3
 
 > **This document is LAW.** Every developer and AI agent working on LeoBook MUST follow these rules without exception. Violations will break the system.
 
@@ -36,6 +36,8 @@ Every entry point (`main()`) MUST call `await run_startup_sync()`. This function
 3. Local database and Supabase table existence.
 Operations MUST NOT start (including live streamer) until startup sync completes successfully.
 
+**Default sync mode**: `sync_on_startup()` uses **delta detection by default** (`force_full=False`). Only rows modified since the last watermark are pushed. A full push only happens during bootstrap (empty local DB). Never set `force_full=True` at startup — it caused a 44s penalty pushing 108k rows on every restart.
+
 **Manual recovery**: `python Leo.py --pull` pulls ALL data from Supabase → local SQLite.
 
 **Sync runs ONLY in Ch1 P3** (Final Sync). Ch1 P1 and Ch1 P2 do NOT sync — sync is consolidated to end of pipeline.
@@ -57,6 +59,8 @@ Leo.py operates via three sequential gates to ensure data integrity:
 
 **Auto-Remediation**: If a gate fails, Leo.py triggers the relevant enrichment or training script automatically (`auto_remediate`) with a **30-minute timeout**. If remediation exceeds the budget, the system logs a warning and proceeds with available data. The pipeline is never blocked indefinitely by auto-remediation.
 
+**Readiness cache schema versioning**: `data_readiness.py` tracks `_CACHE_SCHEMA_VERSION = "9.3"`. Any schema change MUST increment this constant — stale cache entries from older versions are silently cleared and a fresh scan runs. Update `_CACHE_SCHEMA_VERSION` in `Core/System/data_readiness.py` on every release.
+
 ### 2.4 Pipeline Structure (v8.0)
 
 ```
@@ -68,6 +72,8 @@ Prologue (Data Gates):
     P3: AI RL Adapter Readiness (Phase Auto-Detection)
 Chapter 1 (via Core/System/pipeline.py):
     P1: URL Resolution & Odds Harvesting (v9.0 — Direct Harvesting, no login)
+        - SearchDict runs INSIDE fb_manager.py, post-resolution, once per league batch.
+          It is NOT a pipeline step — do not print "SearchDict skipped" in pipeline.py.
     P2: Prediction Pipeline (30-dim Stairway Engine — Rule Engine + Poisson RL)
         - DATA LEAK GUARD: Max 1 prediction per team per week.
           This prevents the model from using future match data to predict
@@ -232,6 +238,31 @@ Compliant split pattern:
 - **Match times**: Raw Flashscore match times are scraped in WAT context. No UTC offset is applied at backend level.
 - **Reasoning**: Football.com operates in Nigeria (WAT). Developer location is WAT. Consistent WAT throughout eliminates confusion and DST edge cases in the Nigerian market.
 
+### 2.18 Streamer Process Management
+
+**Rule**: `fs_live_streamer.py` runs as a fully independent OS process (`start_new_session=True`). It CANNOT be stopped by `Leo.py` or `Ctrl+C`. Use the platform command below.
+
+**Linux / macOS / GitHub Codespaces:**
+```bash
+pkill -f fs_live_streamer
+# Or: pgrep -fa fs_live_streamer → kill -9 <PID>
+```
+
+**Windows (PowerShell):**
+```powershell
+Get-WmiObject Win32_Process | Where-Object {$_.CommandLine -like "*fs_live_streamer*"} | ForEach-Object { taskkill /F /PID $_.ProcessId }
+```
+
+**Batch resume checkpoint**: `fb_manager.py` writes `Data/Logs/batch_checkpoint.json` after each completed batch. On restart, it skips already-completed batches for the current calendar day. Checkpoint is cleared at natural session end.
+
+**Upsert batch sizes** (defined in `sync_schema._BATCH_SIZES`):
+- `predictions`: 200 rows (prevents Supabase `statement_timeout` on 1,969-row single upsert)
+- `schedules`: 500 rows
+- `match_odds`: 1,000 rows
+- All others: 2,000 rows (default)
+
+**Schema type rules**: `paper_trades.league_id` MUST be `TEXT` — Flashscore league IDs are strings. If Supabase column was created as `INTEGER`, run: `ALTER TABLE public.paper_trades ALTER COLUMN league_id TYPE TEXT;`
+
 ---
 
 ## 3. Frontend Architecture (Flutter/Dart)
@@ -373,6 +404,7 @@ All six Tier 1 guardrails are **LIVE as of March 10, 2026**. None may be disable
 
 ---
 
-*Last updated: 2026-03-15 (v9.2 — §2.16 Reuse First, §2.17 Timezone WAT Standard)*
+*Last updated: 2026-03-15 (v9.3 — §2.2 startup sync delta-first, §2.3 cache schema versioning, §2.4 SearchDict placement, §2.18 Streamer process management + batch resume + upsert batch sizes)*
+*Previous: v9.2 — §2.16 Reuse First, §2.17 Timezone WAT Standard*
 *Previous: v9.1 — Module Size Limit §2.14, Module Home Rule §2.15, P2 two-job gate, Season-Aware RL §2.13*
 *Authored by: LeoBook Engineering Team — Materialless LLC*

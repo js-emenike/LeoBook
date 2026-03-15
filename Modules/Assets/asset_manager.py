@@ -204,73 +204,135 @@ def sync_league_assets(limit: Optional[int] = None):
         except:
             pass
 
-def sync_region_flags():
-    """Syncs region flag SVGs from local flag-icons-main to Supabase storage.
-    Also backfills the region_flag column in region_league.csv."""
+def sync_region_flags(limit: Optional[int] = None):
+    """Sync country/region flag SVGs from local flag-icons-main to Supabase.
+
+    Resolves each league's flag ISO code using this priority:
+      1. country_code  — domestic leagues (e.g. 'br', 'gb-eng', 'ES')
+      2. region        — international/continental leagues (e.g. 'AFRICA')
+                         resolved via REGION_TO_ISO_OVERRIDES + country.json
+
+    Uploads each distinct SVG once to Supabase `flags` bucket, then writes
+    the public URL back to `leagues.region_flag` in SQLite so the normal
+    sync pipeline can push it to Supabase.
+
+    Args:
+        limit: Optional cap on number of leagues processed (for testing).
+    """
+    from Data.Access.league_db import get_connection
+
     client = get_supabase_client()
     if not client:
         logger.error("[x] No Supabase client — aborting flag sync.")
         return
 
-    if not LEAGUES_CSV.exists():
-        logger.error(f"[x] {LEAGUES_CSV} not found.")
+    supabase_url = os.getenv("SUPABASE_URL", "").rstrip("/")
+    if not supabase_url:
+        logger.error("[x] SUPABASE_URL not set — cannot construct public URLs.")
         return
-
-    # Build mapping
-    region_map = _build_region_to_iso_map()
 
     storage = client.storage
     ensure_bucket_exists(storage, "flags")
 
-    # Get Supabase URL for constructing public URLs
-    supabase_url = os.getenv("SUPABASE_URL", "").rstrip("/")
+    # ── Build ISO code lookup ─────────────────────────────────────────────
+    # Combines REGION_TO_ISO_OVERRIDES (handles sub-national + naming mismatches)
+    # with country.json (full ISO list).
+    region_map = _build_region_to_iso_map()  # already normalises keys to UPPER
 
-    df = pd.read_csv(LEAGUES_CSV)
-    unique_regions = df['region'].dropna().unique()
+    # ── Load all leagues from SQLite ──────────────────────────────────────
+    conn = get_connection()
+    rows = conn.execute("""
+        SELECT league_id, country_code, region, region_flag
+        FROM leagues
+        WHERE league_id IS NOT NULL
+        ORDER BY league_id
+    """).fetchall()
 
-    uploaded = 0
+    if limit:
+        rows = rows[:limit]
+
+    logger.info("[*] Flag sync: %d leagues to process.", len(rows))
+
+    uploaded_svgs: set = set()   # track which ISO codes we've already uploaded
+    updated_leagues = 0
     skipped = 0
-    not_found = []
+    not_found: list = []
 
-    logger.info(f"[*] Starting region flag sync. Unique regions: {len(unique_regions)}")
+    for row in rows:
+        league_id    = row["league_id"]    if hasattr(row, "keys") else row[0]
+        country_code = row["country_code"] if hasattr(row, "keys") else row[1]
+        region       = row["region"]       if hasattr(row, "keys") else row[2]
 
-    for region in sorted(unique_regions):
-        region_upper = region.upper().strip()
-        if region_upper in ("NONE", "UNKNOWN", ""):
-            skipped += 1
-            continue
+        # ── Resolve ISO code ──────────────────────────────────────────────
+        iso_code = None
 
-        iso_code = region_map.get(region_upper)
+        # Priority 1: country_code (domestic leagues)
+        if country_code and country_code.strip():
+            # Normalise: DB stores mixed-case ('ES', 'GB-ENG', 'br')
+            # SVG filenames are always lowercase ('es', 'gb-eng', 'br')
+            iso_code = country_code.strip().lower()
+
+        # Priority 2: region → override map (international leagues)
+        if not iso_code and region and region.strip():
+            iso_code = region_map.get(region.strip().upper())
+
         if not iso_code:
-            not_found.append(region)
             skipped += 1
             continue
 
-        # Locate local SVG file (4x3 ratio for flags)
+        # ── Locate local SVG ─────────────────────────────────────────────
+        # flag-icons-main uses 4x3 aspect ratio for league/country flags
         svg_path = FLAG_ICONS_DIR / "flags" / "4x3" / f"{iso_code}.svg"
+
         if not svg_path.exists():
-            logger.warning(f"[!] SVG not found for {region} (code: {iso_code}): {svg_path}")
-            not_found.append(f"{region} ({iso_code})")
+            not_found.append(f"{league_id} ({iso_code})")
             skipped += 1
             continue
 
-        # Upload to Supabase Storage: flags/{iso_code}.svg
+        # ── Upload SVG (deduplicated — upload each ISO code only once) ────
         remote_name = f"{iso_code}.svg"
-        result = upload_to_supabase(storage, "flags", svg_path, remote_name)
-        if result:
-            uploaded += 1
+        if iso_code not in uploaded_svgs:
+            result = upload_to_supabase(storage, "flags", svg_path, remote_name)
+            if result:
+                uploaded_svgs.add(iso_code)
 
-        # Construct public URL and backfill CSV
-        public_url = f"{supabase_url}/storage/v1/object/public/flags/{remote_name}"
-        mask = df['region'].str.upper().str.strip() == region_upper
-        df.loc[mask, 'region_flag'] = public_url
-        df.loc[mask, 'last_updated'] = datetime.now(timezone.utc).isoformat()
+        # ── Build public URL and write to SQLite ──────────────────────────
+        public_url = (
+            f"{supabase_url}/storage/v1/object/public/flags/{remote_name}"
+        )
 
-    # Save updated CSV
-    df.to_csv(LEAGUES_CSV, index=False)
-    logger.info(f"[✓] Region flags: {uploaded} uploaded, {skipped} skipped.")
+        conn.execute(
+            "UPDATE leagues SET region_flag = ?, last_updated = ? WHERE league_id = ?",
+            (public_url, datetime.now(timezone.utc).isoformat(), league_id)
+        )
+        updated_leagues += 1
+
+        # Commit in batches of 100 to avoid long-running transactions
+        if updated_leagues % 100 == 0:
+            conn.commit()
+            logger.info("[*] Flag sync progress: %d leagues updated.", updated_leagues)
+
+    # Final commit
+    conn.commit()
+
+    logger.info(
+        "[✓] Flag sync complete: %d SVGs uploaded, %d leagues updated, %d skipped.",
+        len(uploaded_svgs), updated_leagues, skipped
+    )
+
     if not_found:
-        logger.warning(f"[!] Unmapped regions: {not_found}")
+        logger.warning(
+            "[!] SVG not found locally for %d leagues: %s",
+            len(not_found), not_found[:20]
+        )
+
+    # ── Summary print ─────────────────────────────────────────────────────
+    print(f"  [Flags] {len(uploaded_svgs)} SVGs uploaded to Supabase 'flags' bucket")
+    print(f"  [Flags] {updated_leagues} leagues updated in SQLite (leagues.region_flag)")
+    print(f"  [Flags] {skipped} leagues skipped (no country_code or region resolved)")
+    if not_found:
+        print(f"  [Flags] {len(not_found)} SVG files missing locally")
+    print(f"  [Flags] Run --sync to push region_flag values to Supabase table")
 
 
 if __name__ == "__main__":

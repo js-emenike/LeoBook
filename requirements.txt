@@ -24,3 +24,14 @@ nest_asyncio>=1.6.0
 
 # Logging / monitoring (optional, used in some modules)
 colorlog>=6.8.0
+
+numpy
+scikit-learn
+gguf
+RapidFuzz
+google-genai>=1.64.0
+fuzzywuzzy
+python-Levenshtein>=0.12.2
+pytz
+psutil
+tqdm

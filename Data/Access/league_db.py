@@ -512,7 +512,12 @@ def upsert_team(conn: sqlite3.Connection, data: Dict[str, Any]) -> int:
                VALUES (:team_id, :name, :league_ids, :crest, :country_code, :url,
                    :country, :city, :stadium, :other_names, :abbreviations, :search_terms, :last_updated)
                ON CONFLICT(team_id) DO UPDATE SET
-                   name           = COALESCE(excluded.name, teams.name),
+                   -- ROOT CAUSE 3 FIX: Canonical name = first ingestion.
+                   -- Multi-league teams get scraped many times with different transliterations
+                   -- or aliases. We KEEP the first name we stored (NULLIF guard) so that
+                   -- predictions always see the canonical home-league name.
+                   -- To update a team's name intentionally, do it directly in the DB.
+                   name           = COALESCE(NULLIF(teams.name, ''), excluded.name),
                    league_ids     = COALESCE(excluded.league_ids, teams.league_ids),
                    crest          = COALESCE(excluded.crest, teams.crest),
                    -- NULLIF guards against empty string ('') from international leagues

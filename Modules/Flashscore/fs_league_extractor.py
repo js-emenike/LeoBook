@@ -100,6 +100,25 @@ EXTRACT_MATCHES_JS = r"""(ctx) => {
                 if (aSlug && awayTeamId) awayTeamUrl = `https://www.flashscore.com/team/${aSlug}/${awayTeamId}/`;
             }
         }
+        // ROOT CAUSE 1 FIX: The URL match_link is the canonical ground truth for home/away order.
+        // Some Flashscore layouts (Club Friendly, postponed fixtures) render DOM elements in
+        // a non-standard order that mismatches the URL path. Detect and correct the swap.
+        // URL structure: /match/football/home-slug-HOMEID/away-slug-AWAYID/?mid=FIXID
+        if (mLink && homeTeamId && awayTeamId && homeEl && awayEl) {
+            const urlParts = mLink.replace(/^.*\/match\/football\//, '').split('/').filter(p => p && !p.startsWith('?'));
+            if (urlParts.length >= 2) {
+                const urlHomeId = urlParts[0].substring(urlParts[0].lastIndexOf('-') + 1);
+                // If the ID we extracted as 'home' doesn't match the URL's first (home) segment,
+                // but it DOES match the URL's second (away) segment, the DOM order is swapped.
+                if (urlHomeId && urlHomeId !== homeTeamId && urlHomeId === awayTeamId) {
+                    // Swap: DOM rendered away-first, URL is canonical home-first
+                    [homeName, awayName] = [awayName, homeName];
+                    [homeTeamId, awayTeamId] = [awayTeamId, homeTeamId];
+                    [homeTeamUrl, awayTeamUrl] = [awayTeamUrl, homeTeamUrl];
+                    console.warn(`[Extractor] Swapped team names for fixture ${fixtureId} — DOM order mismatch vs URL canonical`);
+                }
+            }
+        }
         matches.push({ fixture_id: fixtureId, date: matchDate, time: matchTime,
             home_team_name: homeName, away_team_name: awayName,
             home_team_id: homeTeamId, away_team_id: awayTeamId,

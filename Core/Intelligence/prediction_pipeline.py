@@ -81,9 +81,14 @@ def get_weekly_fixtures(conn=None, days: int = 7) -> List[Dict]:
 
     placeholders = ",".join(["?"] * len(date_strings))
     rows = conn.execute(
-        f"""SELECT h.name AS home_team_name, 
-                   a.name AS away_team_name,
-                   s.*
+        f"""SELECT
+               -- ROOT CAUSE 2 FIX: Prefer fixture-specific name over global teams.name.
+               -- teams.name is polluted by multi-league upserts (wrong transliteration / alias).
+               -- schedules.home_team_name is stored at scrape time for THAT fixture, so it is
+               -- the most accurate name for this specific matchup.
+               COALESCE(NULLIF(s.home_team_name, ''), h.name) AS home_team_name,
+               COALESCE(NULLIF(s.away_team_name, ''), a.name) AS away_team_name,
+               s.*
             FROM schedules s
             LEFT JOIN teams h ON s.home_team_id = h.team_id
             LEFT JOIN teams a ON s.away_team_id = a.team_id

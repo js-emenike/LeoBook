@@ -89,6 +89,14 @@ async def _activate_and_wait_for_matches(
     # Phase 2: stability-polling scroll (proven, reused from fs_league_hydration)
     # _scroll_to_load scrolls one full viewport per step, polls every 0.4s,
     # stops when count is stable for 2s or DOM bottom reached.
+    # CARD_SEL: the selector for scrollable match cards.
+    # Loaded from knowledge.json fb_schedule_page.match_rows with fallback chain.
+    CARD_SEL = (
+        SelectorManager.get_selector("fb_schedule_page", "match_rows")
+        or SelectorManager.get_selector("fb_schedule_page", "match_card")
+        or SelectorManager.get_selector("fb_schedule_page", "league_section")
+        or ".match-card-section.match-card, .match-card, .league-title-wrapper"
+    )
     found = await _scroll_to_load(page, CARD_SEL)
 
     # Phase 3: result

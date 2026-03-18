@@ -472,6 +472,7 @@ END $$;
 -- Logic: league_id + date + normalized home + away (exact match against schedules).
 -- =============================================================================
 
+DROP FUNCTION IF EXISTS public.normalize_team_name(TEXT);
 CREATE OR REPLACE FUNCTION public.normalize_team_name(raw TEXT)
 RETURNS TEXT
 LANGUAGE sql

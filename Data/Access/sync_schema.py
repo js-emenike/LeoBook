@@ -204,6 +204,7 @@ MATCHING_ENGINE_SQL = """
 -- =============================================================================
 
 -- 9a: Name normalizer
+DROP FUNCTION IF EXISTS public.normalize_team_name(TEXT);
 CREATE OR REPLACE FUNCTION public.normalize_team_name(raw TEXT)
 RETURNS TEXT LANGUAGE sql IMMUTABLE STRICT AS $$
   SELECT TRIM(

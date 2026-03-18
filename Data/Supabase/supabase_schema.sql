@@ -594,6 +594,7 @@ GRANT SELECT ON public.computed_standings TO anon, authenticated, service_role;
 -- =============================================================================
 
 -- 10a: Name normalizer (kept for general use)
+DROP FUNCTION IF EXISTS public.normalize_team_name(TEXT);
 CREATE OR REPLACE FUNCTION public.normalize_team_name(raw TEXT)
 RETURNS TEXT LANGUAGE sql IMMUTABLE STRICT AS $$
   SELECT TRIM(

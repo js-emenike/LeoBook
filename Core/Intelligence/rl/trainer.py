@@ -60,12 +60,14 @@ from typing import Dict, Any, List, Optional, Tuple, Union
 from datetime import datetime, timedelta
 from pathlib import Path
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 
 from .model import LeoBookRLModel
 from .feature_encoder import FeatureEncoder
 from .adapter_registry import AdapterRegistry
 from .trainer_phases import TrainerPhasesMixin
 from .trainer_io import TrainerIOMixin
+from Core.Intelligence.dynamic_concurrency import DynamicConcurrencyEngine
 from .market_space import (
     ACTIONS, N_ACTIONS, SYNTHETIC_ODDS, STAIRWAY_BETTABLE,
     compute_poisson_probs, probs_to_tensor_30dim,
@@ -284,25 +286,15 @@ class RLTrainer(TrainerPhasesMixin, TrainerIOMixin):
                     LIMIT 10
                 """).fetchall()
                 print(
-                    f"\n  [TRAIN] ✗ CRITICAL: Current-season join returned dates back to {earliest} "
+                    f"\n  [TRAIN] ! WARNING: Current-season join returned dates back to {earliest} "
                     f"({days_back} days ago).\n"
-                    f"  [TRAIN]   No football season spans 540+ days. This means leagues.current_season\n"
-                    f"  [TRAIN]   contains stale or incorrect season labels in the database.\n"
-                    f"\n"
-                    f"  [TRAIN]   Leagues with stale current_season (oldest first):\n"
+                    f"  [TRAIN]   No football season spans 540+ days. This may indicate stale metadata.\n"
+                    f"  [TRAIN]   Iterating anyway as requested.\n"
                 )
                 for row in stale_leagues:
                     print(f"  [TRAIN]     {row[1] or row[0]:40s}  current_season={row[2]}  earliest={row[3]}")
-                print(
-                    f"\n"
-                    f"  [TRAIN]   Fix: python Leo.py --enrich-leagues --refresh\n"
-                    f"  [TRAIN]   This will re-populate current_season for all leagues.\n"
-                    f"  [TRAIN]   Then retry: python Leo.py --train-rl\n"
-                    f"\n"
-                    f"  [TRAIN]   If you intentionally want all history:\n"
-                    f"  [TRAIN]   Use: python Leo.py --train-rl --train-season all --cold\n"
-                )
-                return [], "aborted — leagues.current_season is stale (run --enrich-leagues --refresh)"
+                print("\n")
+                # Removed early return: Proceed with the dates found.
 
             return dates, "current season (per-league season join)"
 
@@ -684,23 +676,59 @@ class RLTrainer(TrainerPhasesMixin, TrainerIOMixin):
                 WHERE s.date = ? AND s.home_score IS NOT NULL AND s.away_score IS NOT NULL
             """, (match_date,))
             fixtures = cursor.fetchall()
+            if not fixtures:
+                continue
 
-            for fix in fixtures:
+            # ── Dynamic Concurrency Pre-computation ──────────────────────
+            # We parallelize data building (DB heavy) and feature encoding (CPU heavy)
+            # but keep the actual gradient updates (train_step) sequential.
+            from Data.Access.db_helpers import _get_conn
+            max_workers = DynamicConcurrencyEngine.get_for_rl(len(fixtures))
+            prepped_data = []
+
+            def _prepare_fixture(fix):
                 fixture_id, league_id, home_tid, h_name, away_tid, a_name, h_score, a_score, season = fix
-                outcome = {
-                    "result": "home_win" if h_score > a_score else "away_win" if a_score > h_score else "draw",
-                    "home_score": h_score, "away_score": a_score
-                }
+                # Thread-local connection for safe concurrent DB access
+                t_conn = _get_conn()
+                try:
+                    outcome = {
+                        "result": "home_win" if h_score > a_score else "away_win" if a_score > h_score else "draw",
+                        "home_score": h_score, "away_score": a_score
+                    }
+                    l_idx = self.registry.get_league_idx(league_id)
+                    h_idx = self.registry.get_team_idx(home_tid)
+                    a_idx = self.registry.get_team_idx(away_tid)
 
-                l_idx = self.registry.get_league_idx(league_id)
-                h_idx = self.registry.get_team_idx(home_tid)
-                a_idx = self.registry.get_team_idx(away_tid)
+                    vision_data = self._build_training_vision_data(
+                        t_conn, match_date, league_id, home_tid, h_name, away_tid, a_name, season=season
+                    )
+                    features = FeatureEncoder.encode(vision_data)
+                    expert_probs = self._get_rule_engine_probs(vision_data)
+                    xg_fair_odds = self._get_xg_fair_odds(vision_data) if active_phase >= 2 else None
 
-                vision_data = self._build_training_vision_data(
-                    conn, match_date, league_id, home_tid, h_name, away_tid, a_name, season=season
-                )
-                features = FeatureEncoder.encode(vision_data)
-                expert_probs = self._get_rule_engine_probs(vision_data)
+                    return {
+                        "fix": fix,
+                        "outcome": outcome,
+                        "l_idx": l_idx, "h_idx": h_idx, "a_idx": a_idx,
+                        "features": features,
+                        "expert_probs": expert_probs,
+                        "xg_fair_odds": xg_fair_odds
+                    }
+                finally:
+                    t_conn.close()
+
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                prepped_data = list(executor.map(_prepare_fixture, fixtures))
+
+            for data in prepped_data:
+                fix = data["fix"]
+                outcome = data["outcome"]
+                l_idx, h_idx, a_idx = data["l_idx"], data["h_idx"], data["a_idx"]
+                features = data["features"]
+                expert_probs = data["expert_probs"]
+                xg_fair_odds = data["xg_fair_odds"]
+
+                fixture_id, league_id, home_tid, h_name, away_tid, a_name, h_score, a_score, season = fix
 
                 if active_phase == 1:
                     # Phase 1: pure imitation, no outcome needed
@@ -711,11 +739,7 @@ class RLTrainer(TrainerPhasesMixin, TrainerIOMixin):
                     )
                 else:
                     # FIX-1: compute old_log_prob under CURRENT policy BEFORE the update.
-                    # This is the correct PPO procedure: sample action → record log prob →
-                    # compute reward → update policy → importance-sample with stored log prob.
                     use_kl = (active_phase == 2)
-                    xg_fair_odds = self._get_xg_fair_odds(vision_data)  # FIX-3
-
                     with torch.no_grad():
                         features_dev = features.to(self.device)
                         logits_old, _, _ = self.model(features_dev, l_idx, h_idx, a_idx)

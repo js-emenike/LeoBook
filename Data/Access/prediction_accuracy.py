@@ -22,7 +22,30 @@ from Data.Access.league_db import query_all
 def get_market_option(prediction: str, home_team: str, away_team: str) -> str:
     """
     Normalize prediction string into a generic market option.
+    Handles legacy labels and new MarketOntology (v1.0) strings.
     """
+    if not prediction:
+        return "Unknown"
+
+    # --- Market Ontology Mappings (v1.0) ---
+    pred_str = str(prediction).replace("→", "-") # Standardize separators
+    if "1X2 - 1" in pred_str: return "Home Win"
+    if "1X2 - X" in pred_str: return "Draw"
+    if "1X2 - 2" in pred_str: return "Away Win"
+    if "Double Chance - 1X" in pred_str: return "Home or Draw"
+    if "Double Chance - 12" in pred_str: return "Home or Away"
+    if "Double Chance - X2" in pred_str: return "Away or Draw"
+    if "GG/NG - GG" in pred_str: return "BTTS Yes"
+    if "GG/NG - NG" in pred_str: return "BTTS No"
+    if "Over/Under - Over (2.5 line)" in pred_str or "Over/Under - Over 2.5" in pred_str: return "Over 2.5"
+    if "Over/Under - Under (2.5 line)" in pred_str or "Over/Under - Under 2.5" in pred_str: return "Under 2.5"
+    if "Over/Under - Over (1.5 line)" in pred_str or "Over/Under - Over 1.5" in pred_str: return "Over 1.5"
+    if "Over/Under - Under (1.5 line)" in pred_str or "Over/Under - Under 1.5" in pred_str: return "Under 1.5"
+    if "Over/Under - Over (3.5 line)" in pred_str or "Over/Under - Over 3.5" in pred_str: return "Over 3.5"
+    if "Over/Under - Under (3.5 line)" in pred_str or "Over/Under - Under 3.5" in pred_str: return "Under 3.5"
+    if "Draw No Bet - 1" in pred_str: return "Draw No Bet"
+    if "Draw No Bet - 2" in pred_str: return "Draw No Bet"
+
     pred_lower = prediction.lower()
     home_lower = home_team.lower()
     away_lower = away_team.lower()

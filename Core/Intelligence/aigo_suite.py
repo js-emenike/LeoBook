@@ -6,6 +6,7 @@
 import asyncio
 import functools
 import time
+import inspect
 from typing import Callable, Any, Optional, Dict
 try:
     from playwright.async_api import Page, TimeoutError
@@ -57,7 +58,10 @@ class AIGOSuite:
                 # 1. Standard Retry Loop
                 for attempt in range(max_retries + 1):
                     try:
-                        return await func(*args, **kwargs)
+                        if inspect.iscoroutinefunction(func):
+                            return await func(*args, **kwargs)
+                        else:
+                            return func(*args, **kwargs)
                     except Exception as e:
                         last_exception = e
                         err_lower = str(e).lower()
@@ -83,7 +87,10 @@ class AIGOSuite:
                                     print(f"    [AIGO SUCCESS] Healed selector found. Attempting final recovery run...")
                                     try:
                                         # One last attempt with the healed state
-                                        return await func(*args, **kwargs)
+                                        if inspect.iscoroutinefunction(func):
+                                            return await func(*args, **kwargs)
+                                        else:
+                                            return func(*args, **kwargs)
                                     except Exception as final_e:
                                         print(f"    [AIGO FATAL] Recovery attempt failed even after healing: {final_e}")
                                         raise final_e

@@ -1,5 +1,5 @@
 {
-  "name": "LeoBook + Android SDK 36",
+  "name": "LeoBook + Flutter Development",
   "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
   "features": {
     "ghcr.io/devcontainers/features/node:1": {
@@ -8,16 +8,12 @@
     "ghcr.io/devcontainers/features/java:1": {
       "version": "17",
       "jdkDistro": "ms"
-    },
-    "ghcr.io/devcontainers/features/android-sdk:1": {
-      "sdkVersion": "latest"
     }
   },
   "remoteUser": "vscode",
   "remoteEnv": {
     "PYTHONDONTWRITEBYTECODE": "1",
     "PYTHONUNBUFFERED": "1",
-    "ANDROID_HOME": "/home/vscode/android-sdk",
     "CHROME_EXECUTABLE": "/usr/bin/chromium"
   },
   "customizations": {

@@ -11,15 +11,11 @@ class DynamicConcurrencyEngine:
         
     @classmethod
     def get_for_predictions(cls, num_matches: int) -> int:
-        c = cls.get_level(num_matches)
-        print(f"    [Concurrency] Dynamic Scaling -> Level {c} for {num_matches} matches")
-        return c
+        return cls.get_level(num_matches)
 
     @classmethod
     def get_for_rl(cls, batch_size: int) -> int:
-        c = max(1, cls.get_level(batch_size) // 2)
-        print(f"    [Concurrency] RL Scaling -> Level {c} for batch {batch_size}")
-        return c
+        return max(1, cls.get_level(batch_size) // 2)
 
 if __name__ == '__main__':
     for p in [5, 30, 100, 200, 500, 1000]:

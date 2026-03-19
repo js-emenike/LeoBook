@@ -102,9 +102,14 @@ async def run_utility(args):
     init_csvs()
 
     if args.sync:
+        print("\n  --- LEO: Bidirectional Global Sync (Pull -> Push) ---")
+        await run_full_sync(session_name="Manual Bidirectional Sync", push_only=False)
+        print("  [SUCCESS] Bidirectional Sync complete.")
+
+    elif getattr(args, 'push', False):
         print("\n  --- LEO: Force Push-Only Sync ---")
-        await run_full_sync(session_name="Manual Sync")
-        print("  [SUCCESS] Sync complete.")
+        await run_full_sync(session_name="Manual Push-Only Sync", push_only=True)
+        print("  [SUCCESS] Push complete.")
         # Sync unuploaded log segments to Supabase Storage
         try:
             from Data.Access.log_sync import LogSync
@@ -360,7 +365,7 @@ if __name__ == "__main__":
     _log_session, original_stdout, original_stderr = setup_terminal_logging(args)
 
     # Determine which mode to run
-    is_utility = any([args.sync, getattr(args, 'pull', False),
+    is_utility = any([args.sync, getattr(args, 'push', False), getattr(args, 'pull', False),
                       getattr(args, 'reset_sync', None),
                       args.recommend, args.accuracy,
                       args.search_dict, args.review,

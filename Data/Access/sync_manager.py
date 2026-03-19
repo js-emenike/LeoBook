@@ -107,19 +107,29 @@ class SyncManager:
 
 
     async def sync_on_startup(self, force_full: bool = False) -> None:
-        """Push-only sync on startup using watermark delta detection.
-
-        force_full=False (default): only push rows modified since last sync.
-        force_full=True: push all rows regardless of watermark (fresh-install/recovery).
-
-        A fresh install is handled by the local_count == 0 check inside
-        _sync_table(), which bootstraps from Supabase for empty tables.
-        This default change eliminates the 44s penalty on every restart.
+        """Bidirectional sync on startup: pull then push.
+        
+        reconciles both storages based on watermarks.
         """
         if not self.supabase:
             return
-        logger.info("Starting push-only sync on startup...")
-        print("   [SYNC] Push-Only Sync — local SQLite → Supabase...")
+        logger.info("Starting bidirectional sync on startup...")
+        print("   [SYNC] Bidirectional Sync (Pull → Push) — local ↔ Supabase...")
+        await self.sync_bidirectional(force_full=force_full)
+
+    async def sync_bidirectional(self, force_full: bool = False) -> None:
+        """Pull then push for all tables."""
+        for table_key, config in TABLE_CONFIG.items():
+            # Pull first
+            await self.batch_pull(table_key)
+            # Then push
+            await self._sync_table(table_key, config, force_full=force_full)
+
+    async def push_only_sync(self, force_full: bool = False) -> None:
+        """Push local changes to Supabase (watermark-based)."""
+        if not self.supabase:
+            return
+        logger.info("Starting push-only sync...")
         for table_key, config in TABLE_CONFIG.items():
             await self._sync_table(table_key, config, force_full=force_full)
 
@@ -505,39 +515,37 @@ class SyncManager:
 
 
 @AIGOSuite.aigo_retry(max_retries=3, delay=2.0, use_aigo=False)
-async def run_full_sync(session_name: str = "Periodic", force_full: bool = False) -> bool:
+async def run_full_sync(session_name: str = "Periodic", force_full: bool = False, push_only: bool = True) -> bool:
     """Wrapper to sync ALL tables with audit logging and AIGO protection.
+    push_only=True: push local → Supabase (default for progress updates).
+    push_only=False: bidirectional (pull then push).
     force_full=True pushes every row (bypasses watermark)."""
     from Data.Access.db_helpers import log_audit_event
-    logger.info(f"Starting global full sync [{session_name}] {'(FULL)' if force_full else ''}...")
+    mode_str = "PUSH-ONLY" if push_only else "BIDIRECTIONAL"
+    logger.info(f"Starting global full sync [{session_name}] [{mode_str}] {'(FULL)' if force_full else ''}...")
 
     manager = SyncManager()
 
-    success_count = 0
-    fail_count = 0
-    errors = []
-
-    for table_key, config in TABLE_CONFIG.items():
-        try:
-            await manager._sync_table(table_key, config, force_full=force_full)
-            success_count += 1
-        except Exception as e:
-            logger.error(f"    [Sync Fatal] {table_key}: {e}")
-            fail_count += 1
-            errors.append(f"{table_key}: {str(e)}")
-
-    status = "success" if fail_count == 0 else "partial_failure" if success_count > 0 else "failed"
-    msg = f"Full Chapter Sync ({session_name}): {success_count} passed, {fail_count} failed."
-    if errors:
-        msg += f" Errors: {'; '.join(errors[:3])}"
+    try:
+        if push_only:
+            await manager.push_only_sync(force_full=force_full)
+        else:
+            await manager.sync_bidirectional(force_full=force_full)
+        
+        status = "success"
+        msg = f"Full Chapter Sync ({session_name}) [{mode_str}] passed."
+    except Exception as e:
+        logger.error(f"    [Sync Fatal] {session_name}: {e}")
+        status = "failed"
+        msg = f"Full Chapter Sync ({session_name}) [{mode_str}] failed: {e}"
 
     try:
         log_audit_event(event_type="SYSTEM_SYNC", description=msg, status=status)
     except Exception as e:
         logger.error(f"Failed to log audit event for sync: {e}")
 
-    if fail_count > 0:
-        print(f"\n[!] Sync Warning: {fail_count} tables failed. AIGO fallback may be required.")
+    if status == "failed":
+        print(f"\n[!] Sync Warning: Global sync failed. AIGO fallback may be required.")
         return False
 
     return True

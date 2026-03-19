@@ -128,7 +128,7 @@ def parse_args():
       python Leo.py --accuracy            # Print accuracy report
     """
     parser = argparse.ArgumentParser(
-        description="LeoBook Prediction System — Unified Orchestrator (v3.0)",
+        description="LeoBook Prediction System — Unified Orchestrator (v9.3)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -194,9 +194,11 @@ Examples:
 
     # --- Utility Commands ---
     parser.add_argument('--sync', action='store_true',
-                       help='Force push-only sync (local → Supabase)')
+                       help='Bidirectional sync: pull (Supabase → local) then push (local → Supabase). UPSERT. Use at startup.')
+    parser.add_argument('--push', action='store_true',
+                       help='Push local → Supabase (UPSERT, watermark-based delta). Use during work progress.')
     parser.add_argument('--pull', action='store_true',
-                       help='Pull ALL data from Supabase → local SQLite (bootstrap/recovery)')
+                       help='Pull ALL data from Supabase → local SQLite (UPSERT). Use for bootstrap/recovery.')
     parser.add_argument('--reset-sync', type=str, metavar='TABLE',
                        help='Reset sync watermark for a specific table (e.g. schedules, teams)')
     parser.add_argument('--recommend', action='store_true',
@@ -219,6 +221,8 @@ Examples:
                        help='Extract Flashscore league pages -> SQLite')
     parser.add_argument('--reset-leagues', action='store_true',
                        help='Reset all leagues to unprocessed (use with --enrich-leagues)')
+    parser.add_argument('--refresh', '--refresh-leagues', action='store_true', dest='refresh_leagues',
+                       help='Re-extract all leagues including already processed (use with --enrich-leagues)')
     parser.add_argument('--seasons', type=int, default=0, metavar='N',
                        help='Number of past seasons to extract (use with --enrich-leagues)')
     parser.add_argument('--season', type=int, default=None, metavar='N',

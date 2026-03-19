@@ -333,9 +333,55 @@ def init_db(conn: Optional[sqlite3.Connection] = None) -> sqlite3.Connection:
     _run_alter_migrations(conn)
     _create_post_alter_indexes(conn)
     _reconstruct_teams_table_if_legacy_unique_exists(conn)
+    _initialize_countries(conn)
     _auto_import_csvs(conn)
 
     return conn
+
+
+def _initialize_countries(conn: sqlite3.Connection):
+    """Populates countries table from Data/Store/country.json if empty."""
+    row_count = conn.execute("SELECT COUNT(*) FROM countries").fetchone()[0]
+    if row_count > 0:
+        return
+
+    json_path = os.path.join(DB_DIR, "country.json")
+    if not os.path.exists(json_path):
+        print(f"  [DB] Warning: {json_path} not found. Skipping country init.")
+        return
+
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            countries = json.load(f)
+        
+        now = datetime.utcnow().isoformat()
+        countries_data = []
+        for c in countries:
+            countries_data.append({
+                'code': c.get('code'),
+                'name': c.get('name'),
+                'continent': c.get('continent', ''),
+                'capital': c.get('capital', ''),
+                'flag_1x1': c.get('flag_1x1', ''),
+                'flag_4x3': c.get('flag_4x3', ''),
+                'last_updated': now
+            })
+
+        conn.executemany("""
+            INSERT INTO countries (code, name, continent, capital, flag_1x1, flag_4x3, last_updated)
+            VALUES (:code, :name, :continent, :capital, :flag_1x1, :flag_4x3, :last_updated)
+            ON CONFLICT(code) DO UPDATE SET
+                name=excluded.name,
+                continent=excluded.continent,
+                capital=excluded.capital,
+                flag_1x1=excluded.flag_1x1,
+                flag_4x3=excluded.flag_4x3,
+                last_updated=excluded.last_updated
+        """, countries_data)
+        conn.commit()
+        print(f"  [DB] Initialized {len(countries)} countries from country.json.")
+    except Exception as e:
+        print(f"  [DB] Error initializing countries: {e}")
 
 
 # ---------------------------------------------------------------------------

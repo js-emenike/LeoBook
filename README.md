@@ -4,6 +4,7 @@
 **Chief Engineer**: Emenike Chinenye James
 **Powered by**: Rule Engine + Neural RL Stairway Engine · Gemini Multi-Key (AIGO browser assistant + search enrichment only)
 **Architecture**: v9.3 "Stairway Engine" (All files ≤500 lines · Fully Modular · Season-Aware RL Weighting · Streamer Independence)
+**App Version**: 9.3.0 ([pubspec.yaml](leobookapp/pubspec.yaml) aligned with `LEOBOOK_VERSION` in `Core/Utils/constants.py`)
 
 ---
 
@@ -25,7 +26,7 @@ For the complete file inventory and step-by-step execution trace, see [docs/LeoB
 ## System Architecture (v9.3 — Fully Modular · Streamer Independent)
 
 ```
-Leo.py (Entry Point — 469 lines)
+Leo.py (Entry Point — 473 lines)
 ├── Core/System/pipeline.py (Chapter/Page execution functions)
 │   ├── Startup: Push-Only Sync → Supabase (auto-bootstrap)
 │   ├── Prologue (Materialized Readiness Gates):
@@ -78,10 +79,10 @@ Leo.py (Entry Point — 469 lines)
 
 ```
 LeoBook/
-├── Leo.py                     # Entry point (469 lines)
+├── Leo.py                     # Entry point (473 lines)
 ├── Core/
 │   ├── System/
-│   │   ├── pipeline.py        # Chapter/page execution functions (NEW v9.1)
+│   │   ├── pipeline.py        # Chapter/page execution functions
 │   │   ├── supervisor.py
 │   │   ├── guardrails.py
 │   │   ├── scheduler.py
@@ -96,164 +97,186 @@ LeoBook/
 │   │   ├── rule_engine_manager.py
 │   │   └── rl/
 │   │       ├── trainer.py
-│   │       ├── trainer_phases.py  # NEW v9.1 — reward functions
-│   │       ├── trainer_io.py      # NEW v9.1 — save/load/checkpoint
+│   │       ├── trainer_phases.py
+│   │       ├── trainer_io.py
 │   │       ├── feature_encoder.py
 │   │       └── market_space.py
 │   └── Utils/
 │       └── constants.py
 ├── Modules/
 │   ├── Flashscore/
-│   │   ├── fs_league_enricher.py   # NEW v9.1 (was Scripts/enrich_leagues.py)
-│   │   ├── fs_league_extractor.py  # NEW v9.1
-│   │   ├── fs_league_hydration.py  # NEW v9.1
-│   │   ├── fs_league_images.py     # NEW v9.1
-│   │   ├── fs_live_streamer.py     # Independent process (v9.3 — subprocess.Popen)
-│   │   └── fs_extractor.py         # Live streamer depends on this — do NOT delete
+│   │   ├── fs_league_enricher.py
+│   │   ├── fs_league_extractor.py
+│   │   ├── fs_league_hydration.py
+│   │   ├── fs_league_images.py
+│   │   ├── fs_live_streamer.py     # Independent process (subprocess.Popen)
+│   │   └── fs_extractor.py
 │   ├── FootballCom/
-│   │   ├── fb_manager.py           # Batch resume checkpoint (v9.3)
+│   │   ├── fb_manager.py           # Batch resume checkpoint
 │   │   ├── match_resolver.py       # FixtureResolver — Deterministic SQL matcher
 │   │   ├── navigator.py
 │   │   ├── odds_extractor.py
 │   │   └── booker/
 │   │       ├── placement.py
 │   │       └── booking_code.py
-│   # NOTE: football_logos.py + logo_downloader.py live in Data/Access/ (not Modules/Assets/)
 ├── Data/
 │   ├── Access/
-│   │   ├── league_db.py            # Façade (1092 lines)
-│   │   ├── league_db_schema.py     # NEW v9.1 — schema + migrations
-│   │   ├── db_helpers.py           # 596 lines
-│   │   ├── market_evaluator.py     # NEW v9.1
-│   │   ├── paper_trade_helpers.py  # NEW v9.1
-│   │   ├── gap_scanner.py          # 424 lines
-│   │   ├── gap_models.py           # NEW v9.1 — ColumnSpec, GapReport
-│   │   ├── sync_manager.py         # force_full=False default (v9.3), tqdm bypass
-│   │   ├── sync_schema.py          # _BATCH_SIZES: predictions=200, paper_trades.league_id=TEXT
-│   │   ├── season_completeness.py  # CUP_FORMAT + data_richness_score (v9.1)
+│   │   ├── league_db.py
+│   │   ├── league_db_schema.py
+│   │   ├── db_helpers.py
+│   │   ├── market_evaluator.py
+│   │   ├── paper_trade_helpers.py
+│   │   ├── gap_scanner.py
+│   │   ├── gap_models.py
+│   │   ├── sync_manager.py
+│   │   ├── sync_schema.py
+│   │   ├── season_completeness.py
 │   │   ├── supabase_client.py
 │   │   ├── metadata_linker.py
 │   │   └── outcome_reviewer.py
 │   └── Store/
 │       ├── leobook.db
-│       ├── leagues.json
-│       ├── country.json
-│       ├── ranked_markets_likelihood_updated_with_team_ou.json
+│       ├── country.json            # Base country data (source for DB init)
 │       └── models/
-└── Scripts/
-    ├── enrich_leagues.py           # Shim → Modules/Flashscore/fs_league_enricher
-    ├── football_logos.py           # Shim → Modules/Assets/football_logos
-    ├── recommend_bets.py
-    ├── build_search_dict.py        # 589 lines
-    ├── search_dict_llm.py          # NEW v9.1
-    └── rl_diagnose.py
+├── Scripts/
+│   ├── recommend_bets.py
+│   ├── build_search_dict.py
+│   ├── search_dict_llm.py
+│   └── rl_diagnose.py
+├── leobookapp/                     # Flutter dashboard
+│   ├── pubspec.yaml                # version: 9.3.0+2
+│   └── lib/
+│       ├── presentation/screens/   # search, league (6 tabs), match (3-col), team
+│       ├── core/widgets/           # LeoLoadingIndicator, LeoShimmer, GlassContainer
+│       └── data/repositories/      # DataRepository (fetchLeagueSeasons, etc.)
+└── .devcontainer/
+    ├── devcontainer.json           # remoteEnv.PATH for Flutter/Android SDK
+    └── setup.sh                    # Auto-installs Python deps, Flutter, Android SDK
 ```
-
----
-
-## LeoBook App (Flutter)
-
-The app implements a **Telegram-inspired high-density aesthetic** optimized for visual clarity and real-time data response.
-
-- **Proportional Scaling System** — Custom system ensures perfect parity across all device sizes.
-- **Computed Standings** — The app queries the `computed_standings` VIEW for live-accurate tables.
-- **Liquid Glass UI** — Premium frosted-glass design with micro-radii (14dp).
-- **4-Tab Match System** — Real-time 2.5hr status propagation and Supabase streaming.
 
 ---
 
 ## Quick Start (v9.3)
 
-### Backend (Leo.py)
+### Backend Setup
 
 ```bash
-# Setup
+# 1. Install dependencies
 pip install -r requirements.txt
-pip install -r requirements-rl.txt  # Core RL/AI dependencies
+pip install -r requirements-rl.txt
 playwright install chromium
-bash .devcontainer/setup.sh         # Auto-config system environment
 
-# Execution
-python Leo.py              # Autonomous Orchestrator (Full dynamic cycle)
-python Leo.py --sync        # Push local changes to Supabase
-python Leo.py --pull        # Pull ALL from Supabase → local SQLite (recovery)
-python Leo.py --prologue    # Data readiness check (P1-P3)
-python Leo.py --chapter 1   # Prediction pipeline (Odds → Predict → Sync)
-python Leo.py --chapter 2   # Betting automation
-python Leo.py --review      # Outcome review (Finished matches)
-python Leo.py --recommend   # Recommendations generation
-python Leo.py --streamer    # Standalone Live Multi-Tasker (Scores/Review/Reports)
-python Leo.py --data-quality             # Gap scan + Invalid ID resolution + Completeness init
-python Leo.py --season-completeness      # Show summary of league-season coverage (CUP_FORMAT/ACTIVE/COMPLETED)
-python Leo.py --bypass-cache             # Skip readiness_cache for O(N) gate scan
-python Leo.py --set-expected-matches <id> <season> <num>  # Manual override for P2 logic
-python Leo.py --enrich-leagues           # Smart gap scan (only leagues with missing data)
-python Leo.py --enrich-leagues --limit 5  # Gap scan first 5 leagues
-python Leo.py --enrich-leagues --seasons 2  # Extract last 2 seasons (builds RL history)
-python Leo.py --enrich-leagues --reset   # Full reset: re-enrich ALL leagues
-python Leo.py --assets       # Sync team/league crests + region flags to Supabase
-python Leo.py --logos        # Download football logo packs
-python Leo.py --train-rl     # Chronological RL model training
-python Leo.py --rule-engine --backtest  # Progressive backtest with default engine
-python Leo.py --dry-run      # Full pipeline in dry-run mode (no real bets)
-python Leo.py --help         # Comprehensive CLI command catalog
+# 2. Pull data from Supabase (first time / recovery)
+python Leo.py --pull
 
-# Flags-only sync (without team/league crest sync)
-python -m Modules.Assets.asset_manager --flags
+# 3. Run data quality scan
+python Leo.py --data-quality
 ```
 
-#### Emergency Controls
+### Sync & Operations Standards
+
+To maintain parity between local SQLite and Supabase:
+
+| Command | Direction | Frequency | Operation |
+| :--- | :--- | :--- | :--- |
+| `python Leo.py --sync` | **Pull then Push** | **Startups** | Bidirectional reconcile based on watermarks. |
+| `python Leo.py --push` | **Local → Cloud** | **Work Progress** | Push incremental changes (e.g., every 5% workload). |
+| `python Leo.py --pull` | **Cloud → Local** | **Recovery** | Full pull from Supabase to local SQLite (UPSERT). |
+
+### Recommended Run Order (with existing DB)
 
 ```bash
-# Stop the live streamer (Ctrl+C does NOT work — it runs in a detached process)
-# Linux / macOS / Codespaces:
-pkill -f fs_live_streamer
-# Windows (PowerShell):
-Get-WmiObject Win32_Process | Where-Object {$_.CommandLine -like "*fs_live_streamer*"} | ForEach-Object { taskkill /F /PID $_.ProcessId }
+# Step 1: Bidirectional sync (reconcile both storages)
+python Leo.py --sync
 
-# Create kill switch (immediately halts all betting)
-echo stop > STOP_BETTING
+# Step 2: Data quality scan + gap resolution
+python Leo.py --data-quality
 
-# Remove kill switch (resume betting)
-del STOP_BETTING
+# Step 3: Enrich leagues (fills gaps in schedules/teams)
+python Leo.py --enrich-leagues
 
-# Check stairway state
-python -c "from Core.System.guardrails import StaircaseTracker; print(StaircaseTracker().status())"
+# Step 4: Sync assets (crests, logos, flags)
+python Leo.py --assets
+
+# Step 5: Run the pipeline (Prologue → Ch1 → Ch2)
+python Leo.py --prologue          # Data readiness gates
+python Leo.py --chapter 1         # Odds + Predictions + Recommendations
+python Leo.py --chapter 2         # Automated booking
+
+# Step 6: Final Progress Push
+python Leo.py --push
+```
+
+### Full CLI Reference
+
+```bash
+# ── Autonomous Mode ──
+python Leo.py                            # Full cycle (Prologue → Ch1 → Ch2, loop)
+python Leo.py --dry-run                  # Full pipeline, no real bets
+
+# ── Sync & Data ──
+python Leo.py --sync                     # Bidirectional reconcile (Pull then Push)
+python Leo.py --push                     # Push local → Supabase (UPSERT)
+python Leo.py --pull                     # Pull Supabase → local SQLite (Full)
+python Leo.py --reset-sync TABLE         # Reset sync watermark for a table
+python Leo.py --data-quality             # Gap scan + Invalid ID resolution
+python Leo.py --season-completeness      # Print league-season coverage report
+
+# ── Granular Execution ──
+python Leo.py --prologue                 # All prologue pages (P1+P2+P3)
+python Leo.py --prologue --page 1        # Prologue P1: Cloud Handshake & Review
+python Leo.py --chapter 1               # Full Chapter 1 (Extraction → Predict → Sync)
+python Leo.py --chapter 1 --page 1       # Ch1 P1: URL Resolution & Odds Harvesting
+python Leo.py --chapter 1 --page 2       # Ch1 P2: Predictions (Rule Engine + RL)
+python Leo.py --chapter 1 --page 3       # Ch1 P3: Recommendations & Final Sync
+python Leo.py --chapter 2               # Full Chapter 2 (Booking & Withdrawal)
+
+# ── Enrichment ──
+python Leo.py --enrich-leagues           # Smart gap-driven enrichment
+python Leo.py --refresh                  # Re-extract including processed (use with --enrich-leagues)
+python Leo.py --enrich-leagues --seasons 2         # Last 2 past seasons build RL history
+
+# ── Assets ──
+python Leo.py --assets                   # Sync team/league crests + region flags
+python Leo.py --logos                    # Download football logo packs
+python Leo.py --upgrade-crests           # Upgrade crests to HQ logos
+
+# ── Intelligence ──
+python Leo.py --recommend                # Generate recommendations
+python Leo.py --accuracy                 # Print accuracy report
+python Leo.py --review                   # Outcome review (finished matches)
+python Leo.py --search-dict              # Rebuild search dictionary
+
+# ── Rule Engine ──
+python Leo.py --rule-engine              # Show default engine
+python Leo.py --rule-engine --backtest   # Progressive backtest
+
+# ── RL Training ──
+python Leo.py --train-rl                 # Train RL model
+python Leo.py --diagnose-rl              # RL decision diagnostics
+
+# ── Model Sync ──
+python Leo.py --push-models              # Upload models → Supabase Storage
+python Leo.py --pull-models              # Download models ← Supabase Storage
+
+# ── Live Streaming ──
+python Leo.py --streamer                 # Spawn live score streamer (detached)
+
+# ── Full help ──
+python Leo.py --help
+```
+
+### Flutter App
+
+```bash
+cd leobookapp
+flutter pub get
+flutter run -d chrome         # Web
+flutter run -d android        # Android (connected device)
+flutter build apk --release   # Production APK
 ```
 
 ---
 
-## Environment Variables
-
-| Variable                   | Purpose                                             |
-| -------------------------- | --------------------------------------------------- |
-| `GEMINI_API_KEY`           | Multi-key rotation for AI analysis                  |
-| `GROK_API_KEY`             | Grok API key (search dict LLM enrichment)           |
-| `SUPABASE_URL`             | Supabase endpoint                                   |
-| `SUPABASE_SERVICE_KEY`     | Backend service key (Admin)                         |
-| `FB_PHONE` / `FB_PASSWORD` | Betting platform credentials                        |
-| `LEO_CYCLE_WAIT_HOURS`     | Default sleep between autonomous tasks (default: 6) |
-| `KILL_SWITCH_FILE`         | Path to kill switch file (default: `STOP_BETTING`)  |
-| `MIN_BALANCE_BEFORE_BET`   | Minimum balance before betting (default: ₦500)      |
-| `DAILY_LOSS_LIMIT`         | Max daily loss before halt (default: ₦5,000)        |
-| `STAIRWAY_SEED`            | Step 1 stake amount (default: ₦1,000)               |
-
----
-
-## Documentation
-
-| Document | Purpose |
-| -------- | ------- |
-| [docs/RULEBOOK.md](docs/RULEBOOK.md) | **MANDATORY** — Engineering standards & philosophy (v9.3) |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | Chapter/page file dependency map + commit history (v9.3) |
-| [docs/PROJECT_STAIRWAY.md](docs/PROJECT_STAIRWAY.md) | Capital compounding strategy — the "why" behind LeoBook |
-| [docs/LeoBook_Technical_Master_Report.md](docs/LeoBook_Technical_Master_Report.md) | File inventory, execution flow, safety guardrails |
-| [docs/leobook_algorithm.md](docs/leobook_algorithm.md) | Algorithm reference (Rule Engine + Neural RL) |
-| [docs/AIGO_Learning_Guide.md](docs/AIGO_Learning_Guide.md) | Self-healing extraction pipeline |
-| [docs/SUPABASE_SETUP.md](docs/SUPABASE_SETUP.md) | Supabase schema, storage buckets, deployed views |
-| [docs/RL_First_Principles_Data_Audit.md](docs/RL_First_Principles_Data_Audit.md) | RL data readiness audit + tier advancement guide |
-
----
-
-*Last updated: 2026-03-15 — v9.3 "Stairway Engine" — Streamer independence, batch resume, Supabase upsert fixes, hydration recovery scroll*
+*Last updated: 2026-03-19 — v9.3.0 — UI overhaul (professional loading states), sync standards restructured, automatic country initialization*
 *LeoBook Engineering Team — Materialless LLC*

@@ -140,7 +140,7 @@ def compute_h2h(conn, home_team_id: str, away_team_id: str, limit: int = 10) -> 
     return [_schedule_to_match_dict(dict(r)) for r in rows]
 
 
-def build_rule_engine_input(conn, fixture: Dict) -> Dict[str, Any]:
+def build_rule_engine_input(conn, fixture) -> Dict[str, Any]:
     """Assemble the h2h_data + standings dict that RuleEngine.analyze expects.
 
     Args:
@@ -148,8 +148,9 @@ def build_rule_engine_input(conn, fixture: Dict) -> Dict[str, Any]:
         fixture: A schedule row dict for the fixture to predict
 
     Returns:
-        Dict with {"h2h_data": {...}, "standings": [...]}
+        Dict with {"h2h_data": {...}, "standings": [...], "real_odds": {...}}
     """
+    fixture_id = fixture.get("fixture_id", "")
     home_team_id = fixture.get("home_team_id", "")
     away_team_id = fixture.get("away_team_id", "")
     home_team = fixture.get("home_team_name", "")
@@ -170,6 +171,53 @@ def build_rule_engine_input(conn, fixture: Dict) -> Dict[str, Any]:
     if league_id:
         standings = computed_standings(conn=conn, league_id=league_id, season=season)
 
+    # 4. Fetch real harvested odds for this fixture
+    # We map (market_id, exact_outcome, line) to our internal action keys.
+    real_odds: Dict[str, float] = {}
+    if fixture_id:
+        from Core.Intelligence.rl.market_space import ACTIONS
+        rows = conn.execute(
+            "SELECT market_id, exact_outcome, line, odds_value FROM match_odds WHERE fixture_id = ?",
+            (fixture_id,)
+        ).fetchall()
+        
+        # Build lookup for harvested odds
+        harvested_map = {}
+        for r in rows:
+            # Key format: market_id|outcome|line (normalized)
+            l_str = str(r["line"]) if r["line"] else ""
+            key = f"{r['market_id']}|{r['exact_outcome'].lower()}|{l_str}"
+            harvested_map[key] = r["odds_value"]
+
+        # Map ACTIONS to harvested odds
+        for action in ACTIONS:
+            a_key = action["key"]
+            if a_key == "no_bet": continue
+            
+            # Action spec
+            m_id = action.get("market_id")
+            out  = action.get("outcome", "").lower()
+            line = str(action.get("line")) if action.get("line") is not None else ""
+            
+            # Simple mapping logic: action "outcome" usually matches start of "exact_outcome"
+            # or is exactly the same. We try a few variations.
+            target_key = f"{m_id}|{out}|{line}"
+            if target_key in harvested_map:
+                real_odds[a_key] = harvested_map[target_key]
+            else:
+                # Fallback: exact_outcome starts with outcome (e.g. "Over 1.5" starts with "Over")
+                for h_key, h_val in harvested_map.items():
+                    h_mid, h_out, h_line = h_key.split("|")
+                    if h_mid == m_id and h_line == line:
+                         if h_out == out or h_out.startswith(out):
+                             real_odds[a_key] = h_val
+                             break
+
+    if real_odds:
+        logger.debug(f"    [Ch1P2] Real odds loaded for fixture {fixture_id}: {len(real_odds)} markets")
+    elif fixture_id:
+        logger.warning(f"    [Ch1P2] No real odds found for fixture {fixture_id} — will use synthetic fallback")
+
     h2h_data = {
         "home_team": home_team,
         "away_team": away_team,
@@ -179,7 +227,7 @@ def build_rule_engine_input(conn, fixture: Dict) -> Dict[str, Any]:
         "head_to_head": h2h,
     }
 
-    return {"h2h_data": h2h_data, "standings": standings}
+    return {"h2h_data": h2h_data, "standings": standings, "real_odds": real_odds}
 
 
 def _get_existing_prediction_ids(conn) -> set:
@@ -254,6 +302,7 @@ async def run_predictions(conn=None, fixtures: List[Dict] = None, scheduler=None
         try:
             # Build input from DB
             vision_data = build_rule_engine_input(conn, fixture)
+            real_odds = vision_data.get("real_odds", {})
 
             # Data quality gate: need at least 3 form matches per team
             home_form_n = len(vision_data["h2h_data"]["home_last_10_matches"])
@@ -264,7 +313,7 @@ async def run_predictions(conn=None, fixtures: List[Dict] = None, scheduler=None
                 continue
 
             # Run symbolic prediction
-            rule_prediction = RuleEngine.analyze(vision_data)
+            rule_prediction = RuleEngine.analyze(vision_data, live_odds=real_odds)
 
             # --- Semantic Rule Engine Upgrade ---
             from Core.Intelligence.rule_engine_manager import SemanticRuleEngine
@@ -305,8 +354,48 @@ async def run_predictions(conn=None, fixtures: List[Dict] = None, scheduler=None
             prediction["chosen_market"] = rule_output["chosen_market"]
             prediction["market_id"] = rule_output["market_id"]
             prediction["statistical_edge"] = rule_output["statistical_edge"]
+
+
             # Use RuleEngine's top score as the pure model suggestion since we removed Poisson
             prediction["pure_model_suggestion"] = "Poisson Top Score: " + rule_prediction.get("best_score", "1-1")
+
+            # ── Bug 2 fix: Attach chosen market odds to prediction ──────────
+            # real_odds maps action keys (e.g. "home_win", "over_2_5") to odds values.
+            # chosen_market is the human-readable label (e.g. "1X2 - Home").
+            # We need to find the matching odds from real_odds using market_id + outcome.
+            chosen_odds = ""
+            if real_odds and prediction.get("chosen_market"):
+                cm = prediction["chosen_market"]
+                mid = str(prediction.get("market_id", ""))
+                # Strategy 1: direct key match from real_odds
+                # real_odds keys are action keys like "home_win", "dc_1x", "over_2_5"
+                for rk, rv in real_odds.items():
+                    chosen_odds = str(rv)
+                    # We want the FIRST match for the chosen market_id
+                    # Check if this action's market_id matches
+                    try:
+                        from Core.Intelligence.rl.market_space import ACTIONS
+                        matching_action = next(
+                            (a for a in ACTIONS if a["key"] == rk and str(a.get("market_id")) == mid),
+                            None
+                        )
+                        if matching_action:
+                            chosen_odds = str(rv)
+                            break
+                    except Exception:
+                        break
+                # Strategy 2: fallback — look up match_odds directly for chosen_market
+                if not chosen_odds and fixture_id and mid:
+                    try:
+                        odds_row = conn.execute(
+                            "SELECT odds_value FROM match_odds WHERE fixture_id = ? AND market_id = ? LIMIT 1",
+                            (fixture_id, mid)
+                        ).fetchone()
+                        if odds_row:
+                            chosen_odds = str(odds_row[0])
+                    except Exception:
+                        pass
+            prediction["odds"] = chosen_odds
 
             # Update confidence label based on merged confidence
             conf = merged["confidence"]

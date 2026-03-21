@@ -31,10 +31,10 @@ from Data.Access.db_helpers import _get_conn
 
 # Outcome row cell — clickable button for each outcome
 _SEL_OUTCOME_CELL = ".m-table-row > div.un-rounded-rem-\\[10px\\]"
-# Outcome label inside each cell
-_SEL_OUTCOME_LABEL = ".m-table-row > div > span.un-text-rem-\\[12px\\]"
-# Odds value inside each cell
-_SEL_OUTCOME_ODDS = ".m-table-row > div > span.un-text-rem-\\[14px\\].un-font-bold"
+# Outcome label inside each cell (updated 2026-03 to match current DOM)
+_SEL_OUTCOME_LABEL = "span.un-text-encore-text-type-one-tertiary"
+# Odds value inside each cell (updated 2026-03 to match current DOM)
+_SEL_OUTCOME_ODDS = "span.un-text-encore-brand-secondary"
 # Fallback: .m-outcome-item contains both label and odds
 _SEL_OUTCOME_ITEM = ".m-outcome-item"
 
@@ -95,7 +95,7 @@ def _get_match_url_for_fixture(
     try:
         # fb_matches stores the resolved match URL after Ch1 P1
         row = conn.execute(
-            """SELECT match_url FROM fb_matches
+            """SELECT url FROM fb_matches
                WHERE fixture_id = ? LIMIT 1""",
             (fixture_id,),
         ).fetchone()
@@ -154,8 +154,8 @@ async def _find_and_click_outcome(
         rows = await page.query_selector_all(".m-table-row")
         for row in rows:
             try:
-                # Find label inside row
-                label_el = await row.query_selector("span.un-text-rem-\\[12px\\]")
+                # Find label inside row (updated 2026-03 selectors)
+                label_el = await row.query_selector("span.un-text-encore-text-type-one-tertiary")
                 if not label_el:
                     label_el = await row.query_selector("span")
                 if not label_el:
@@ -164,9 +164,9 @@ async def _find_and_click_outcome(
                 if label_text != target_norm:
                     continue
 
-                # Found label — get odds from sibling span
+                # Found label — get odds from sibling span (updated 2026-03 selectors)
                 odds_el = await row.query_selector(
-                    "span.un-text-rem-\\[14px\\].un-font-bold"
+                    "span.un-text-encore-brand-secondary"
                 )
                 if not odds_el:
                     odds_el = await row.query_selector("span.un-font-bold")

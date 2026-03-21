@@ -193,6 +193,24 @@ def get_recommendations(target_date=None, show_all_upcoming=False, **kwargs):
             if tier == 3 and (total_score <= 0.8 or recent_acc <= 0.6):
                 continue
 
+            # --- Bug 5 fix: Stairway Odds Gate ---
+            # If odds exist, enforce Stairway bettable range [1.20, 4.00]
+            STAIRWAY_ODDS_MIN = 1.20
+            STAIRWAY_ODDS_MAX = 4.00
+            raw_odds = p.get('odds', '')
+            odds_value = None
+            odds_status = 'missing'
+            if raw_odds and str(raw_odds).strip():
+                try:
+                    odds_value = float(str(raw_odds).strip().replace(',', '.'))
+                    if STAIRWAY_ODDS_MIN <= odds_value <= STAIRWAY_ODDS_MAX:
+                        odds_status = 'in_range'
+                    else:
+                        odds_status = 'out_of_range'
+                        continue  # Skip — odds outside Stairway bettable range
+                except (ValueError, TypeError):
+                    odds_status = 'unparseable'
+
             tier_labels = {1: "⚓ Anchor", 2: "💎 Value", 3: "🎯 Specialist"}
             trend_icon = "↗️" if rel_info['trend'] > 0.05 else "↘️" if rel_info['trend'] < -0.05 else "➡️" if rel_info['trend'] != 0 else ""
 
@@ -212,6 +230,8 @@ def get_recommendations(target_date=None, show_all_upcoming=False, **kwargs):
                 'tier': tier,
                 'tier_label': tier_labels.get(tier, ""),
                 'likelihood': likelihood,
+                'odds': odds_value,
+                'odds_status': odds_status,
             })
         except Exception:
             continue

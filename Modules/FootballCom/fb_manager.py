@@ -568,7 +568,7 @@ async def run_odds_harvesting(playwright: Playwright):
     # Skipped per directive: search_dict fallbacks removed
     
     # ── Supabase Sync ──────────────────────────────────────
-    if all_resolved or total_session_odds_count > 0:
+    if all_resolved_matches or total_session_odds_count > 0:
         try:
             from Data.Access.sync_manager import SyncManager, TABLE_CONFIG
             manager = SyncManager()

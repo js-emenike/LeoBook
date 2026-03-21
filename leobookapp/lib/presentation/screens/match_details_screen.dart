@@ -111,7 +111,7 @@ class _MatchDetailsScreenState extends State<MatchDetailsScreen> {
 
                   // Main Content
                   Transform.translate(
-                    offset: const Offset(0, -40),
+                    offset: const Offset(0, -16),
                     child: Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 16),
                       child: Column(

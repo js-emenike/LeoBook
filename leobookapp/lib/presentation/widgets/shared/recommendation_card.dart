@@ -100,13 +100,13 @@ class _RecommendationCardState extends State<RecommendationCard> {
     final isLive = rec.confidence.toLowerCase().contains('live') ||
         rec.league.toLowerCase().contains('live');
 
-    // Parse region/league
-    String region = '';
+    // Parse country/league
+    String country = '';
     String leagueDisplay = rec.league;
     if (rec.league.contains(':')) {
       final parts = rec.league.split(':');
       if (parts.length >= 2) {
-        region = parts[0].trim();
+        country = parts[0].trim();
         leagueDisplay = parts[1].trim();
       }
     }
@@ -165,8 +165,8 @@ class _RecommendationCardState extends State<RecommendationCard> {
                         );
                       },
                       child: Text(
-                        region.isNotEmpty
-                            ? '$region: $leagueDisplay'
+                        country.isNotEmpty
+                            ? '$country: $leagueDisplay'
                             : leagueDisplay,
                         style: LeoTypography.labelSmall.copyWith(
                           color: AppColors.textTertiary,

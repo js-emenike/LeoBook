@@ -5,6 +5,7 @@
 
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import '../models/rule_config_model.dart';
 
 class LeoService {
@@ -16,6 +17,16 @@ class LeoService {
 
   /// Load all rule engines from rule_engines.json.
   Future<List<RuleConfigModel>> loadAllEngines() async {
+    if (kIsWeb) {
+      return [
+        RuleConfigModel(
+          id: 'default',
+          name: 'Default (Locked on Web)',
+          description: 'Standard prediction logic (Local files unavailable on Web)',
+          isDefault: true,
+        )
+      ];
+    }
     final file = File(_enginesFile);
     if (!await file.exists()) {
       // Create default engine if file doesn't exist
@@ -35,6 +46,7 @@ class LeoService {
 
   /// Save all engines to rule_engines.json.
   Future<void> saveAllEngines(List<RuleConfigModel> engines) async {
+    if (kIsWeb) return;
     final file = File(_enginesFile);
     await file.writeAsString(
       jsonEncode(engines.map((e) => e.toJson()).toList()),
@@ -95,6 +107,7 @@ class LeoService {
   }
 
   Future<void> triggerBacktest(RuleConfigModel config) async {
+    if (kIsWeb) return;
     await saveEngine(config);
     final triggerFile = File('$_storePath\\trigger_backtest.json');
     await triggerFile.writeAsString(
@@ -109,6 +122,7 @@ class LeoService {
   Future<List<Map<String, dynamic>>> getBacktestResults(
     String configName,
   ) async {
+    if (kIsWeb) return [];
     // Try new format first (backtest_{id}.csv), then legacy
     for (final prefix in ['backtest_', 'predictions_custom_']) {
       final file = File('$_storePath\\$prefix$configName.csv');

@@ -29,13 +29,22 @@ class DataRepository {
         query = query.eq('date', dateStr);
       }
 
-      final response = await query.order('date', ascending: false).limit(2000);
+      // When date-filtered, the result set is bounded (typically 500-1200 rows per day).
+      // No need for .limit() which causes statement timeouts on large tables.
+      // Only apply limit for unfiltered queries (fallback for latest matches).
+      final ordered = query.order('date', ascending: false);
+      final response = date != null
+          ? await ordered
+          : await ordered.limit(300);
 
-      // Predictions loaded silently — count: ${response.length}
-
-      // Cache data locally
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_keyPredictions, jsonEncode(response));
+      // Cache a small subset locally (localStorage has ~5MB limit on Web)
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final listToCache = (response as List).take(50).toList();
+        await prefs.setString(_keyPredictions, jsonEncode(listToCache));
+      } catch (e) {
+        debugPrint('Warning: Could not cache predictions (quota exceeded): $e');
+      }
 
       return (response as List)
           .map((row) => MatchModel.fromCsv(row, row))
@@ -65,39 +74,43 @@ class DataRepository {
 
   Future<List<MatchModel>> getTeamMatches(String teamName) async {
     try {
-      // First try exact match
-      final List<dynamic> predRows = await _supabase
-          .from('predictions')
-          .select()
-          .or('home_team.eq."$teamName",away_team.eq."$teamName"')
-          .order('date', ascending: false)
-          .limit(10);
-
-      final List<dynamic> schedRows = await _supabase
-          .from('schedules')
-          .select()
-          .or('home_team.eq."$teamName",away_team.eq."$teamName"')
-          .order('date', ascending: false)
-          .limit(10);
-
-      // Fallback to fuzzy match if both are empty
-      List<dynamic> predList = predRows;
-      List<dynamic> schedList = schedRows;
-
-      if (predList.isEmpty && schedList.isEmpty) {
-        predList = await _supabase
+      // Run predictions + schedules in parallel (not sequential) to halve latency
+      final results = await Future.wait([
+        _supabase
             .from('predictions')
             .select()
-            .or('home_team.ilike."%$teamName%",away_team.ilike."%$teamName%"')
+            .or('home_team.eq."$teamName",away_team.eq."$teamName"')
             .order('date', ascending: false)
-            .limit(10);
-        
-        schedList = await _supabase
+            .limit(10),
+        _supabase
             .from('schedules')
             .select()
-            .or('home_team.ilike."%$teamName%",away_team.ilike."%$teamName%"')
+            .or('home_team.eq."$teamName",away_team.eq."$teamName"')
             .order('date', ascending: false)
-            .limit(10);
+            .limit(10),
+      ]);
+
+      List<dynamic> predList = results[0] as List<dynamic>;
+      List<dynamic> schedList = results[1] as List<dynamic>;
+
+      // Fallback to fuzzy match only if both are empty
+      if (predList.isEmpty && schedList.isEmpty) {
+        final fuzzy = await Future.wait([
+          _supabase
+              .from('predictions')
+              .select()
+              .or('home_team.ilike."%$teamName%",away_team.ilike."%$teamName%"')
+              .order('date', ascending: false)
+              .limit(10),
+          _supabase
+              .from('schedules')
+              .select()
+              .or('home_team.ilike."%$teamName%",away_team.ilike."%$teamName%"')
+              .order('date', ascending: false)
+              .limit(10),
+        ]);
+        predList = fuzzy[0] as List<dynamic>;
+        schedList = fuzzy[1] as List<dynamic>;
       }
 
       final List<MatchModel> matches = [];
@@ -108,7 +121,6 @@ class DataRepository {
           final m = isPrediction
               ? MatchModel.fromCsv(row, row)
               : MatchModel.fromCsv(row);
-
           final id = m.fixtureId;
           if (!seenIds.contains(id)) {
             matches.add(m);
@@ -120,29 +132,8 @@ class DataRepository {
       addMatches(predList, true);
       addMatches(schedList, false);
 
-      // Enrich matches with crests if missing
-      if (matches.isNotEmpty) {
-        final crests = await fetchTeamCrests();
-        for (int i = 0; i < matches.length; i++) {
-          final m = matches[i];
-          final hCrest = crests[m.homeTeam] ?? m.homeCrestUrl;
-          final aCrest = crests[m.awayTeam] ?? m.awayCrestUrl;
-          if ((hCrest != null && hCrest != m.homeCrestUrl) ||
-              (aCrest != null && aCrest != m.awayCrestUrl)) {
-            matches[i] = m.mergeWith(MatchModel(
-              fixtureId: m.fixtureId,
-              date: m.date,
-              time: m.time,
-              homeTeam: m.homeTeam,
-              awayTeam: m.awayTeam,
-              status: m.status,
-              sport: m.sport,
-              homeCrestUrl: hCrest ?? m.homeCrestUrl,
-              awayCrestUrl: aCrest ?? m.awayCrestUrl,
-            ));
-          }
-        }
-      }
+      // Skip fetchTeamCrests() — crests already present in prediction/schedule rows.
+      // The full teams table scan was causing statement timeouts on free tier.
 
       matches.sort((a, b) {
         try {
@@ -166,7 +157,8 @@ class DataRepository {
           .from('predictions')
           .select()
           .gt('recommendation_score', 0)
-          .order('recommendation_score', ascending: false);
+          .order('recommendation_score', ascending: false)
+          .limit(100);
 
       debugPrint('Loaded ${response.length} recommendations from Supabase');
 
@@ -303,7 +295,10 @@ class DataRepository {
         query = query.eq('date', dateStr);
       }
 
-      final response = await query.order('date', ascending: false).limit(5000);
+      final ordered = query.order('date', ascending: false);
+      final response = date != null
+          ? await ordered
+          : await ordered.limit(300);
 
       return (response as List).map((row) => MatchModel.fromCsv(row)).toList();
     } catch (e) {

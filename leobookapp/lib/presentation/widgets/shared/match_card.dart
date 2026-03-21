@@ -1,21 +1,24 @@
-// match_card.dart: match_card.dart: Widget/screen for App — Widgets.
+// match_card.dart — LeoBook v9.4 Match Card (Type3/Type4 Design)
 // Part of LeoBook App — Widgets
 //
-// Classes: MatchCard, _MatchCardState, _LiveBadge, _LiveBadgeState
+// Layout aligned with UI Inspiration Type3.png (upcoming) and Type4.png (finished).
+// Uses LeoTypography (DM Sans), AppColors (UI Inspiration Night), SpacingScale.
 
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
-import 'package:leobookapp/data/models/match_model.dart';
+import 'package:flutter_svg/flutter_svg.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:leobookapp/core/constants/app_colors.dart';
 import 'package:leobookapp/core/constants/responsive_constants.dart';
+import 'package:leobookapp/core/constants/spacing_constants.dart';
+import 'package:leobookapp/core/theme/leo_typography.dart';
+import 'package:leobookapp/data/models/match_model.dart';
 import 'package:leobookapp/data/repositories/data_repository.dart';
 import '../../screens/match_details_screen.dart';
 import '../../screens/team_screen.dart';
 import '../../screens/league_screen.dart';
-import 'package:cached_network_image/cached_network_image.dart';
-import 'package:leobookapp/core/widgets/glass_container.dart';
-import 'badges/leo_badge.dart';
-import 'package:leobookapp/core/animations/leo_animations.dart';
 
 class MatchCard extends StatefulWidget {
   final MatchModel match;
@@ -36,660 +39,591 @@ class MatchCard extends StatefulWidget {
 
 class _MatchCardState extends State<MatchCard> {
   bool _isHovered = false;
+  Timer? _countdownTimer;
+  Duration? _timeToKickoff;
 
   MatchModel get match => widget.match;
-  bool get showLiveBadge => widget.showLiveBadge;
-  bool get showLeagueHeader => widget.showLeagueHeader;
-  bool get hideLeagueInfo => widget.hideLeagueInfo;
 
   @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final isFinished = match.status.toLowerCase().contains('finished') ||
-        match.status.toUpperCase() == 'FT';
+  void initState() {
+    super.initState();
+    _startCountdown();
+  }
 
-    // Parse League String "REGION: League"
-    String region = "";
-    String leagueName = match.league ?? "";
+  @override
+  void dispose() {
+    _countdownTimer?.cancel();
+    super.dispose();
+  }
+
+  void _startCountdown() {
+    final kickoff = _parseKickoffTime();
+    if (kickoff == null) return;
+    _updateCountdown(kickoff);
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      _updateCountdown(kickoff);
+    });
+  }
+
+  void _updateCountdown(DateTime kickoff) {
+    final now = DateTime.now();
+    final diff = kickoff.difference(now);
+    if (diff.isNegative || diff.inHours >= 1) {
+      if (_timeToKickoff != null) setState(() => _timeToKickoff = null);
+      return;
+    }
+    setState(() => _timeToKickoff = diff);
+  }
+
+  DateTime? _parseKickoffTime() {
+    try {
+      final t = match.time.length == 5 ? match.time : '00:00';
+      return DateTime.parse("${match.date}T$t:00");
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // Parse "Country: League Name" into parts
+  (String country, String leagueName) get _leagueParts {
+    String country = '';
+    String leagueName = match.league ?? '';
     if (leagueName.contains(':')) {
       final parts = leagueName.split(':');
       if (parts.length >= 2) {
-        region = parts[0].trim();
+        country = parts[0].trim();
         leagueName = parts[1].trim();
       }
     }
-    // Remove "WORLD" hardcoded region labels
-    if (region.toUpperCase() == "WORLD") region = "";
+    return (country, leagueName);
+  }
 
-    return LeoFadeIn(
-      child: Semantics(
-        label: '${match.homeTeam} vs ${match.awayTeam}, ${match.status}',
-        button: true,
-        child: MouseRegion(
-      onEnter: (_) => setState(() => _isHovered = true),
-      onExit: (_) => setState(() => _isHovered = false),
-      child: AnimatedScale(
-        scale: _isHovered ? 1.012 : 1.0,
-        duration: const Duration(milliseconds: 200),
-        curve: Curves.easeOutCubic,
-        child: GlassContainer(
-          margin: EdgeInsets.symmetric(
-            horizontal: Responsive.sp(context, 4),
-            vertical: Responsive.sp(context, 4),
-          ),
-          padding: EdgeInsets.all(Responsive.sp(context, 10)),
-          borderRadius: Responsive.sp(context, 10),
-          borderColor: _isHovered
-              ? AppColors.primary.withValues(alpha: 0.5)
-              : ((match.isLive || match.isStartingSoon)
-                  ? AppColors.liveRed.withValues(alpha: 0.3)
-                  : AppColors.primary.withValues(alpha: 0.2)),
+  bool get _isFinished =>
+      match.status.toLowerCase().contains('finished') ||
+      match.status.toUpperCase() == 'FT' ||
+      match.isFinished;
+
+  @override
+  Widget build(BuildContext context) {
+    final (:country, :leagueName) = (country: _leagueParts.$1, leagueName: _leagueParts.$2);
+
+    return Padding(
+      padding: EdgeInsets.symmetric(
+        horizontal: Responsive.sp(context, 4),
+        vertical: Responsive.sp(context, 4),
+      ),
+      child: MouseRegion(
+        onEnter: (_) => setState(() => _isHovered = true),
+        onExit: (_) => setState(() => _isHovered = false),
+        child: GestureDetector(
           onTap: () {
+            HapticFeedback.lightImpact();
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (context) => MatchDetailsScreen(match: match),
+                builder: (_) => MatchDetailsScreen(match: match),
               ),
             );
           },
-          child: Stack(
-            clipBehavior: Clip.none,
-            children: [
-              Column(
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOutCubic,
+            transform: Matrix4.identity()..scale(_isHovered ? 1.012 : 1.0),
+            transformAlignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: AppColors.neutral800,
+              borderRadius: BorderRadius.circular(SpacingScale.cardRadius),
+              border: Border.all(
+                color: _isHovered
+                    ? AppColors.primary.withValues(alpha: 0.4)
+                    : (match.isLive
+                        ? AppColors.liveRed.withValues(alpha: 0.3)
+                        : AppColors.neutral700),
+                width: 0.5,
+              ),
+              boxShadow: _isHovered
+                  ? [
+                      BoxShadow(
+                        color: AppColors.primary.withValues(alpha: 0.08),
+                        blurRadius: 16,
+                        spreadRadius: 1,
+                      )
+                    ]
+                  : null,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // ═══════════════════════════════════════════════
+                // HEADER: League info + badges
+                // ═══════════════════════════════════════════════
+                if (widget.showLeagueHeader && !widget.hideLeagueInfo)
+                  _buildLeagueHeader(context, country, leagueName),
+
+                // ═══════════════════════════════════════════════
+                // TEAMS ROW: Name [Crest] Score/VS [Crest] Name
+                // ═══════════════════════════════════════════════
+                Padding(
+                  padding: EdgeInsets.symmetric(
+                    horizontal: SpacingScale.cardPadding,
+                    vertical: Responsive.sp(context, 8),
+                  ),
+                  child: _buildTeamsRow(context),
+                ),
+
+                // ═══════════════════════════════════════════════
+                // STATUS / COUNTDOWN / DATE
+                // ═══════════════════════════════════════════════
+                _buildStatusSection(context),
+
+                SizedBox(height: Responsive.sp(context, 6)),
+
+                // ═══════════════════════════════════════════════
+                // PREDICTION BAR (bottom)
+                // ═══════════════════════════════════════════════
+                if (match.prediction != null && match.prediction!.isNotEmpty)
+                  _buildPredictionBar(context),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // LEAGUE HEADER ROW
+  // ─────────────────────────────────────────────────────────────
+  Widget _buildLeagueHeader(
+      BuildContext context, String country, String leagueName) {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        SpacingScale.cardPadding,
+        SpacingScale.md,
+        SpacingScale.cardPadding,
+        SpacingScale.xs,
+      ),
+      child: Row(
+        children: [
+          // League crest
+          if (match.leagueCrestUrl != null && match.leagueCrestUrl!.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(right: SpacingScale.sm),
+              child: CachedNetworkImage(
+                imageUrl: match.leagueCrestUrl!,
+                width: Responsive.sp(context, 14),
+                height: Responsive.sp(context, 14),
+                fit: BoxFit.contain,
+                errorWidget: (_, __, ___) => const SizedBox.shrink(),
+              ),
+            ),
+          // League name (tappable)
+          Expanded(
+            child: GestureDetector(
+              onTap: () {
+                if (match.league != null && match.league!.isNotEmpty) {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => LeagueScreen(
+                        leagueId: match.league!,
+                        leagueName: match.league!,
+                      ),
+                    ),
+                  );
+                }
+              },
+              child: Text(
+                country.isNotEmpty ? '$country: $leagueName' : leagueName,
+                style: LeoTypography.labelSmall.copyWith(
+                  color: AppColors.textTertiary,
+                  letterSpacing: 0.3,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ),
+          // Live badge or Accurate badge
+          if (widget.showLiveBadge && (match.isLive || match.isStartingSoon))
+            _LiveIndicator(
+              label: match.isStartingSoon && !match.isLive
+                  ? 'SOON'
+                  : (match.liveMinute != null && match.liveMinute!.isNotEmpty
+                      ? "LIVE ${match.liveMinute}'"
+                      : 'LIVE'),
+              isLive: match.isLive,
+            )
+          else if (_isFinished && match.isPredictionAccurate)
+            Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: SpacingScale.sm,
+                vertical: SpacingScale.xs,
+              ),
+              decoration: BoxDecoration(
+                color: AppColors.success.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(SpacingScale.chipRadius),
+              ),
+              child: Text(
+                '✓ ACCURATE',
+                style: LeoTypography.labelSmall.copyWith(
+                  color: AppColors.success,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // TEAMS ROW: TeamName [Crest] VS/Score [Crest] TeamName
+  // ─────────────────────────────────────────────────────────────
+  Widget _buildTeamsRow(BuildContext context) {
+    final crestSize = Responsive.sp(context, 30);
+
+    return Row(
+      children: [
+        // Home team name (left-aligned)
+        Expanded(
+          child: _TeamName(
+            name: match.homeTeam,
+            align: TextAlign.right,
+            onTap: () => _navigateToTeam(context, match.homeTeam),
+          ),
+        ),
+        SizedBox(width: Responsive.sp(context, 6)),
+        // Home crest
+        _TeamCrest(
+          crestUrl: match.homeCrestUrl,
+          teamName: match.homeTeam,
+          size: crestSize,
+        ),
+        // Center: Score or VS
+        Padding(
+          padding: EdgeInsets.symmetric(horizontal: Responsive.sp(context, 8)),
+          child: _buildCenterElement(context),
+        ),
+        // Away crest
+        _TeamCrest(
+          crestUrl: match.awayCrestUrl,
+          teamName: match.awayTeam,
+          size: crestSize,
+        ),
+        SizedBox(width: Responsive.sp(context, 6)),
+        // Away team name (right-aligned)
+        Expanded(
+          child: _TeamName(
+            name: match.awayTeam,
+            align: TextAlign.left,
+            onTap: () => _navigateToTeam(context, match.awayTeam),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // Center element: Score for finished/live, VS for upcoming
+  Widget _buildCenterElement(BuildContext context) {
+    final hasScore = match.homeScore != null && match.awayScore != null;
+
+    if (_isFinished && hasScore) {
+      // Type4: "1 : 1" score
+      return Text(
+        '${match.homeScore} : ${match.awayScore}',
+        style: LeoTypography.headlineMedium.copyWith(
+          color: AppColors.textPrimary,
+          fontWeight: FontWeight.w900,
+        ),
+      );
+    }
+
+    if (match.isLive && hasScore) {
+      // Live score with red accent
+      return Text(
+        '${match.homeScore} : ${match.awayScore}',
+        style: LeoTypography.headlineMedium.copyWith(
+          color: AppColors.liveRed,
+          fontWeight: FontWeight.w900,
+        ),
+      );
+    }
+
+    // Type3: "VS" for upcoming
+    return Text(
+      'VS',
+      style: LeoTypography.titleLarge.copyWith(
+        color: AppColors.textTertiary,
+        fontStyle: FontStyle.italic,
+        fontWeight: FontWeight.w900,
+      ),
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // STATUS SECTION: FINISHED / Countdown / Date
+  // ─────────────────────────────────────────────────────────────
+  Widget _buildStatusSection(BuildContext context) {
+    return Column(
+      children: [
+        // Status text (FINISHED, LIVE minute, etc.)
+        if (match.displayStatus.isNotEmpty)
+          Text(
+            match.displayStatus,
+            style: LeoTypography.labelSmall.copyWith(
+              color: match.isLive ? AppColors.liveRed : AppColors.textTertiary,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 1.0,
+            ),
+          ),
+
+        // Countdown (only within 1hr before kickoff)
+        if (_timeToKickoff != null) ...[
+          SizedBox(height: Responsive.sp(context, 4)),
+          _buildCountdown(context),
+        ],
+
+        SizedBox(height: Responsive.sp(context, 2)),
+
+        // Date & Time
+        Text(
+          _formatDisplayDate(),
+          style: LeoTypography.bodySmall.copyWith(
+            color: AppColors.textTertiary,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCountdown(BuildContext context) {
+    final d = _timeToKickoff!;
+    final mm = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final ss = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _countdownDigit(context, '00'),
+        _countdownSep(context),
+        _countdownDigit(context, mm),
+        _countdownSep(context),
+        _countdownDigit(context, ss),
+      ],
+    );
+  }
+
+  Widget _countdownDigit(BuildContext context, String val) {
+    return Text(
+      val,
+      style: LeoTypography.titleLarge.copyWith(
+        color: AppColors.primary,
+        fontWeight: FontWeight.w700,
+        letterSpacing: 2,
+      ),
+    );
+  }
+
+  Widget _countdownSep(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.symmetric(horizontal: Responsive.sp(context, 4)),
+      child: Text(
+        ':',
+        style: LeoTypography.titleLarge.copyWith(
+          color: AppColors.textTertiary,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+
+  String _formatDisplayDate() {
+    try {
+      final dt = DateTime.parse(match.date);
+      const months = [
+        '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+      ];
+      return '${dt.day} ${months[dt.month]} ${dt.year} (${match.time})';
+    } catch (_) {
+      return '${match.date} (${match.time})';
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // PREDICTION BAR (bottom section)
+  // ─────────────────────────────────────────────────────────────
+  Widget _buildPredictionBar(BuildContext context) {
+    final reliabilityVal =
+        double.tryParse(match.marketReliability ?? '') ?? 0;
+    final oddsVal = double.tryParse(match.odds ?? '') ?? 0;
+
+    return Container(
+      padding: EdgeInsets.symmetric(
+        horizontal: SpacingScale.cardPadding,
+        vertical: Responsive.sp(context, 8),
+      ),
+      decoration: BoxDecoration(
+        color: match.isLive
+            ? AppColors.liveRed.withValues(alpha: 0.08)
+            : AppColors.neutral700.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.vertical(
+          bottom: Radius.circular(SpacingScale.cardRadius),
+        ),
+      ),
+      child: Row(
+        children: [
+          // Prediction text
+          Expanded(
+            child: Text(
+              match.prediction ?? '',
+              style: LeoTypography.labelLarge.copyWith(
+                color: _isFinished
+                    ? (match.isPredictionAccurate
+                        ? AppColors.success
+                        : AppColors.error)
+                    : AppColors.textPrimary,
+                decoration: _isFinished && !match.isPredictionAccurate
+                    ? TextDecoration.lineThrough
+                    : null,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          // Reliability badge
+          if (reliabilityVal > 0)
+            Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: SpacingScale.sm,
+                vertical: SpacingScale.xs,
+              ),
+              decoration: BoxDecoration(
+                color: AppColors.success.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(SpacingScale.chipRadius),
+              ),
+              child: Text(
+                '${reliabilityVal.toStringAsFixed(0)}%',
+                style: LeoTypography.labelSmall.copyWith(
+                  color: AppColors.success,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          // Odds + football.com logo
+          if (oddsVal > 0) ...[
+            SizedBox(width: Responsive.sp(context, 8)),
+            Container(
+              padding: EdgeInsets.symmetric(
+                horizontal: Responsive.sp(context, 8),
+                vertical: Responsive.sp(context, 3),
+              ),
+              decoration: BoxDecoration(
+                color: AppColors.primary.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(SpacingScale.chipRadius),
+                border: Border.all(
+                  color: AppColors.primary.withValues(alpha: 0.25),
+                  width: 0.5,
+                ),
+              ),
+              child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  if (showLeagueHeader && !hideLeagueInfo)
-                    GestureDetector(
-                      onTap: () {
-                        if (match.league != null && match.league!.isNotEmpty) {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => LeagueScreen(
-                                leagueId: match.league!,
-                                leagueName: match.league!,
-                              ),
-                            ),
-                          );
-                        }
-                      },
-                      child: Column(
-                        children: [
-                          // League Crest + League Name Row
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              if (match.leagueCrestUrl != null &&
-                                  match.leagueCrestUrl!.isNotEmpty)
-                                Padding(
-                                  padding: EdgeInsets.only(
-                                      right: Responsive.sp(context, 5)),
-                                  child: CachedNetworkImage(
-                                    imageUrl: match.leagueCrestUrl!,
-                                    width: Responsive.sp(context, 14),
-                                    height: Responsive.sp(context, 14),
-                                    fit: BoxFit.contain,
-                                    placeholder: (_, __) => SizedBox(
-                                      width: Responsive.sp(context, 14),
-                                    ),
-                                    errorWidget: (_, __, ___) => SizedBox(
-                                      width: Responsive.sp(context, 14),
-                                    ),
-                                  ),
-                                ),
-                              Flexible(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    if (region.isNotEmpty)
-                                      Text(
-                                        region.toUpperCase(),
-                                        style: TextStyle(
-                                          fontSize: Responsive.sp(context, 7),
-                                          fontWeight: FontWeight.w900,
-                                          color: AppColors.textGrey,
-                                          letterSpacing: 0.5,
-                                        ),
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                    Text(
-                                      leagueName.toUpperCase(),
-                                      style: TextStyle(
-                                        fontSize: Responsive.sp(context, 8.5),
-                                        fontWeight: FontWeight.w900,
-                                        color: Colors.white,
-                                        letterSpacing: 0.2,
-                                      ),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                          SizedBox(height: Responsive.sp(context, 2)),
-                          // Date & Time — hide date when live
-                          Text(
-                            match.isLive
-                                ? "${(match.liveMinute != null && match.liveMinute!.isNotEmpty) ? "${match.liveMinute}'" : 'LIVE'}${match.displayStatus.isEmpty ? '' : ' • ${match.displayStatus}'}"
-                                : "${match.date} • ${match.time}${match.displayStatus.isEmpty ? '' : ' • ${match.displayStatus}'}",
-                            style: TextStyle(
-                              fontSize: Responsive.sp(context, 7),
-                              fontWeight: FontWeight.bold,
-                              color: match.isLive
-                                  ? AppColors.liveRed
-                                  : AppColors.textGrey,
-                            ),
-                          ),
-                        ],
-                      ),
-                    )
-                  else ...[
-                    Text(
-                      match.isLive
-                          ? "${(match.liveMinute != null && match.liveMinute!.isNotEmpty) ? "${match.liveMinute}'" : 'LIVE'}${match.displayStatus.isEmpty ? '' : ' • ${match.displayStatus}'}"
-                          : "${match.date} • ${match.time}${match.displayStatus.isEmpty ? '' : ' • ${match.displayStatus}'}",
-                      style: TextStyle(
-                        fontSize: Responsive.sp(context, 7),
-                        fontWeight: FontWeight.bold,
-                        color: match.isLive
-                            ? AppColors.liveRed
-                            : AppColors.textGrey,
-                      ),
+                  SvgPicture.asset(
+                    'assets/icons/footballcom_logo.svg',
+                    width: Responsive.sp(context, 12),
+                    height: Responsive.sp(context, 12),
+                    colorFilter: const ColorFilter.mode(
+                      AppColors.textPrimary,
+                      BlendMode.srcIn,
                     ),
-                  ],
-                  SizedBox(height: Responsive.sp(context, 6)),
-
-                  // Teams Comparison / Result
-                  if (isFinished)
-                    _buildFinishedLayout(context, isDark)
-                  else
-                    _buildActiveLayout(context, isDark),
-
-                  SizedBox(height: Responsive.sp(context, 6)),
-
-                  // Prediction Section
-                  Container(
-                    padding: EdgeInsets.all(Responsive.sp(context, 7)),
-                    decoration: BoxDecoration(
-                      color: match.isLive
-                          ? AppColors.liveRed.withValues(alpha: 0.08)
-                          : (isDark
-                              ? Colors.white.withValues(alpha: 0.05)
-                              : Colors.black.withValues(alpha: 0.03)),
-                      borderRadius:
-                          BorderRadius.circular(Responsive.sp(context, 8)),
-                      border: Border.all(
-                        color: match.isLive
-                            ? AppColors.liveRed.withValues(alpha: 0.15)
-                            : (isDark
-                                ? Colors.white.withValues(alpha: 0.06)
-                                : Colors.black.withValues(alpha: 0.04)),
-                        width: 0.5,
-                      ),
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Flexible(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                match.isLive
-                                    ? "IN-PLAY PREDICTION"
-                                    : "LEO PREDICTION",
-                                style: TextStyle(
-                                  fontSize: Responsive.sp(context, 6),
-                                  fontWeight: FontWeight.w900,
-                                  color: match.isLive
-                                      ? AppColors.liveRed
-                                      : AppColors.textGrey,
-                                  letterSpacing: 0.3,
-                                ),
-                              ),
-                              SizedBox(height: Responsive.sp(context, 1)),
-                              Text(
-                                match.prediction ?? "N/A",
-                                style: TextStyle(
-                                  fontSize: Responsive.sp(context, 9),
-                                  fontWeight: FontWeight.w900,
-                                  color: isFinished
-                                      ? AppColors.success
-                                      : AppColors.primary,
-                                  decoration: isFinished &&
-                                          !(match.prediction
-                                                  ?.contains('Accurate') ??
-                                              true)
-                                      ? TextDecoration.lineThrough
-                                      : null,
-                                ),
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              if (match.marketReliability != null)
-                                Text(
-                                  "RELIABILITY: ${match.marketReliability}%",
-                                  style: TextStyle(
-                                    fontSize: Responsive.sp(context, 6),
-                                    fontWeight: FontWeight.bold,
-                                    color: AppColors.success
-                                        .withValues(alpha: 0.7),
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ),
-                        if (match.odds != null && match.odds!.isNotEmpty) ...[
-                          SizedBox(width: Responsive.sp(context, 4)),
-                          _OddsBox(match: match, isFinished: isFinished),
-                        ],
-                      ],
+                  ),
+                  SizedBox(width: Responsive.sp(context, 4)),
+                  Text(
+                    oddsVal.toStringAsFixed(2),
+                    style: LeoTypography.labelLarge.copyWith(
+                      color: AppColors.primary,
                     ),
                   ),
                 ],
               ),
-              if (showLiveBadge && (match.isLive || match.isStartingSoon))
-                Positioned(
-                  top: 0,
-                  right: 0,
-                  child: LeoBadge(
-                    label: match.isStartingSoon && !match.isLive
-                        ? 'SOON'
-                        : (match.liveMinute != null &&
-                                match.liveMinute!.isNotEmpty
-                            ? "LIVE ${match.liveMinute}'"
-                            : 'LIVE'),
-                    variant: match.isStartingSoon && !match.isLive
-                        ? LeoBadgeVariant.scheduled
-                        : LeoBadgeVariant.live,
-                    size: LeoBadgeSize.small,
-                  ),
-                ),
-              if (isFinished && match.isPredictionAccurate)
-                Positioned(
-                  top: 0,
-                  right: 0,
-                  child: Container(
-                    padding: EdgeInsets.symmetric(
-                      horizontal: Responsive.sp(context, 6),
-                      vertical: Responsive.sp(context, 2),
-                    ),
-                    decoration: BoxDecoration(
-                      color: AppColors.success,
-                      borderRadius: BorderRadius.only(
-                        topRight: Radius.circular(Responsive.sp(context, 10)),
-                        bottomLeft: Radius.circular(Responsive.sp(context, 6)),
-                      ),
-                    ),
-                    child: Text(
-                      "ACCURATE",
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: Responsive.sp(context, 6),
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ),
-    ),  // close MouseRegion
-  ),    // close Semantics
-);  // close LeoFadeIn
-  }
-
-  Widget _buildActiveLayout(BuildContext context, bool isDark) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Expanded(child: _buildTeamLogoCol(context, match.homeTeam, isDark)),
-        Container(
-          padding: EdgeInsets.symmetric(horizontal: Responsive.sp(context, 6)),
-          child: match.isLive ||
-                  (!match.isNonPlayable &&
-                      match.homeScore != null &&
-                      match.awayScore != null)
-              ? Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          match.homeScore ?? "0",
-                          style: TextStyle(
-                            fontSize: Responsive.sp(context, 16),
-                            fontWeight: FontWeight.w900,
-                            color: isDark ? Colors.white : AppColors.textDark,
-                          ),
-                        ),
-                        Padding(
-                          padding: EdgeInsets.symmetric(
-                              horizontal: Responsive.sp(context, 2)),
-                          child: Text(
-                            "-",
-                            style: TextStyle(
-                              color: AppColors.textGrey,
-                              fontSize: Responsive.sp(context, 12),
-                            ),
-                          ),
-                        ),
-                        Text(
-                          match.awayScore ?? "0",
-                          style: TextStyle(
-                            fontSize: Responsive.sp(context, 16),
-                            fontWeight: FontWeight.w900,
-                            color: isDark ? Colors.white : AppColors.textDark,
-                          ),
-                        ),
-                      ],
-                    ),
-                    SizedBox(height: Responsive.sp(context, 1)),
-                    if (match.displayStatus.isNotEmpty)
-                      Text(
-                        match.displayStatus,
-                        style: TextStyle(
-                          fontSize: Responsive.sp(context, 6),
-                          fontWeight: FontWeight.bold,
-                          color: match.isLive
-                              ? AppColors.liveRed
-                              : AppColors.primary,
-                          letterSpacing: 0.3,
-                        ),
-                      ),
-                  ],
-                )
-              : Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      "VS",
-                      style: TextStyle(
-                        fontSize: Responsive.sp(context, 9),
-                        fontWeight: FontWeight.w900,
-                        fontStyle: FontStyle.italic,
-                        color: AppColors.textGrey,
-                      ),
-                    ),
-                    if (match.isNonPlayable &&
-                        match.displayStatus.isNotEmpty) ...[
-                      SizedBox(height: Responsive.sp(context, 2)),
-                      Text(
-                        match.displayStatus,
-                        style: TextStyle(
-                          fontSize: Responsive.sp(context, 6),
-                          fontWeight: FontWeight.bold,
-                          color: AppColors.liveRed.withValues(alpha: 0.8),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-        ),
-        Expanded(child: _buildTeamLogoCol(context, match.awayTeam, isDark)),
-      ],
-    );
-  }
-
-  Widget _buildFinishedLayout(BuildContext context, bool isDark) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Expanded(
-          child: Column(
-            children: [
-              _buildFinishedRow(
-                context,
-                match.homeTeam,
-                match.homeScore ?? "0",
-                isDark,
-                match.homeCrestUrl,
-              ),
-              SizedBox(height: Responsive.sp(context, 4)),
-              _buildFinishedRow(
-                context,
-                match.awayTeam,
-                match.awayScore ?? "0",
-                isDark,
-                match.awayCrestUrl,
-              ),
-            ],
-          ),
-        ),
-        Container(
-          width: 0.5,
-          height: Responsive.sp(context, 24),
-          margin: EdgeInsets.only(left: Responsive.sp(context, 8)),
-          color: isDark
-              ? Colors.white.withValues(alpha: 0.05)
-              : Colors.black.withValues(alpha: 0.04),
-        ),
-        Container(
-          padding: EdgeInsets.only(left: Responsive.sp(context, 8)),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Text(
-                "RESULT",
-                style: TextStyle(
-                  fontSize: Responsive.sp(context, 6),
-                  fontWeight: FontWeight.w900,
-                  color: AppColors.textGrey,
-                ),
-              ),
-              SizedBox(height: Responsive.sp(context, 2)),
-              Text(
-                "FT",
-                style: TextStyle(
-                  fontSize: Responsive.sp(context, 11),
-                  fontWeight: FontWeight.w900,
-                  color: isDark ? Colors.white : AppColors.textDark,
-                ),
-              ),
-              SizedBox(height: Responsive.sp(context, 1)),
-              Text(
-                match.displayStatus,
-                style: TextStyle(
-                  fontSize: Responsive.sp(context, 6),
-                  fontWeight: FontWeight.bold,
-                  color: AppColors.primary,
-                  letterSpacing: 0.3,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildFinishedRow(
-    BuildContext context,
-    String teamName,
-    String score,
-    bool isDark,
-    String? crestUrl,
-  ) {
-    final logoSize = Responsive.sp(context, 16);
-    return GestureDetector(
-      onTap: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => TeamScreen(
-              teamName: teamName,
-              repository: context.read<DataRepository>(),
             ),
-          ),
-        );
-      },
-      child: Row(
-        children: [
-          Container(
-            width: logoSize,
-            height: logoSize,
-            decoration: (crestUrl != null && crestUrl.isNotEmpty)
-                ? null
-                : BoxDecoration(
-                    color: isDark
-                        ? Colors.white.withValues(alpha: 0.05)
-                        : AppColors.neutral700,
-                    shape: BoxShape.circle,
-                  ),
-            child: ClipOval(
-              child: crestUrl != null && crestUrl.isNotEmpty
-                  ? CachedNetworkImage(
-                      imageUrl: crestUrl,
-                      fit: BoxFit.contain,
-                      placeholder: (context, url) => Center(
-                        child: Text(
-                          teamName.substring(0, 1).toUpperCase(),
-                          style: TextStyle(
-                            fontSize: Responsive.sp(context, 5),
-                            color: AppColors.textGrey,
-                          ),
-                        ),
-                      ),
-                      errorWidget: (context, url, error) => Center(
-                        child: Text(
-                          teamName.substring(0, 1).toUpperCase(),
-                          style: TextStyle(
-                            fontSize: Responsive.sp(context, 5),
-                            color: AppColors.textGrey,
-                          ),
-                        ),
-                      ),
-                    )
-                  : Center(
-                      child: Text(
-                        teamName.substring(0, 1).toUpperCase(),
-                        style: TextStyle(
-                          fontSize: Responsive.sp(context, 6),
-                          fontWeight: FontWeight.bold,
-                          color: AppColors.textGrey,
-                        ),
-                      ),
-                    ),
-            ),
-          ),
-          SizedBox(width: Responsive.sp(context, 4)),
-          Expanded(
-            child: Text(
-              teamName,
-              style: TextStyle(
-                fontSize: Responsive.sp(context, 9),
-                fontWeight: FontWeight.w700,
-                color: isDark ? Colors.white : AppColors.textDark,
-              ),
-            ),
-          ),
-          Text(
-            score,
-            style: TextStyle(
-              fontSize: Responsive.sp(context, 11),
-              fontWeight: FontWeight.w900,
-              color: isDark ? Colors.white : AppColors.textDark,
-            ),
-          ),
+          ],
         ],
       ),
     );
   }
 
-  Widget _buildTeamLogoCol(BuildContext context, String teamName, bool isDark) {
-    final crestUrl =
-        (teamName == match.homeTeam) ? match.homeCrestUrl : match.awayCrestUrl;
-    return GestureDetector(
-      onTap: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => TeamScreen(
-              teamName: teamName,
-              repository: context.read<DataRepository>(),
-            ),
-          ),
-        );
-      },
-      child: Column(
-        children: [
-          _buildTeamLogo(context, teamName, isDark, crestUrl),
-          SizedBox(height: Responsive.sp(context, 4)),
-          Text(
-            teamName,
-            textAlign: TextAlign.center,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontSize: Responsive.sp(context, 8),
-              fontWeight: FontWeight.w800,
-              color: isDark ? Colors.white : AppColors.textDark,
-            ),
-          ),
-        ],
+  void _navigateToTeam(BuildContext context, String teamName) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => TeamScreen(
+          teamName: teamName,
+          repository: context.read<DataRepository>(),
+        ),
       ),
     );
   }
+}
 
-  Widget _buildTeamLogo(
-      BuildContext context, String teamName, bool isDark, String? crestUrl) {
-    final logoSize = Responsive.sp(context, 28);
-    final hasCrest = crestUrl != null && crestUrl.isNotEmpty;
+// ═══════════════════════════════════════════════════════════════
+// TEAM CREST CIRCLE
+// ═══════════════════════════════════════════════════════════════
+class _TeamCrest extends StatelessWidget {
+  final String? crestUrl;
+  final String teamName;
+  final double size;
+
+  const _TeamCrest({
+    required this.crestUrl,
+    required this.teamName,
+    required this.size,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final initial = teamName.isNotEmpty ? teamName[0].toUpperCase() : '?';
+    final hasCrest = crestUrl != null && crestUrl!.isNotEmpty;
+
     return Container(
-      width: logoSize,
-      height: logoSize,
-      decoration: hasCrest
-          ? null
-          : BoxDecoration(
-              color: isDark
-                  ? Colors.white.withValues(alpha: 0.05)
-                  : Colors.black.withValues(alpha: 0.03),
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: isDark
-                    ? Colors.white.withValues(alpha: 0.06)
-                    : Colors.black.withValues(alpha: 0.04),
-                width: 0.5,
-              ),
-            ),
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: hasCrest ? null : AppColors.neutral700,
+        shape: BoxShape.circle,
+        border: hasCrest
+            ? null
+            : Border.all(color: AppColors.neutral600, width: 0.5),
+      ),
       child: ClipOval(
-        child: crestUrl != null && crestUrl.isNotEmpty
+        child: hasCrest
             ? CachedNetworkImage(
-                imageUrl: crestUrl,
+                imageUrl: crestUrl!,
                 fit: BoxFit.contain,
-                placeholder: (context, url) => Center(
+                placeholder: (_, __) => Center(
                   child: Text(
-                    teamName.substring(0, 1).toUpperCase(),
-                    style: TextStyle(
-                      fontSize: Responsive.sp(context, 10),
-                      fontWeight: FontWeight.w900,
-                      color: AppColors.textGrey.withValues(alpha: 0.3),
-                    ),
+                    initial,
+                    style: LeoTypography.labelSmall
+                        .copyWith(color: AppColors.textTertiary),
                   ),
                 ),
-                errorWidget: (context, url, error) => Center(
+                errorWidget: (_, __, ___) => Center(
                   child: Text(
-                    teamName.substring(0, 1).toUpperCase(),
-                    style: TextStyle(
-                      fontSize: Responsive.sp(context, 10),
-                      fontWeight: FontWeight.w900,
-                      color: AppColors.textGrey.withValues(alpha: 0.3),
-                    ),
+                    initial,
+                    style: LeoTypography.labelSmall
+                        .copyWith(color: AppColors.textTertiary),
                   ),
                 ),
               )
             : Center(
                 child: Text(
-                  teamName.substring(0, 1).toUpperCase(),
-                  style: TextStyle(
-                    fontSize: Responsive.sp(context, 12),
+                  initial,
+                  style: LeoTypography.titleLarge.copyWith(
+                    color: AppColors.textTertiary.withValues(alpha: 0.5),
                     fontWeight: FontWeight.w900,
-                    color: AppColors.textGrey.withValues(alpha: 0.5),
                   ),
                 ),
               ),
@@ -698,43 +632,106 @@ class _MatchCardState extends State<MatchCard> {
   }
 }
 
-// _LiveBadge removed — replaced by LeoBadge(variant: LeoBadgeVariant.live / scheduled)
+// ═══════════════════════════════════════════════════════════════
+// TEAM NAME LABEL
+// ═══════════════════════════════════════════════════════════════
+class _TeamName extends StatelessWidget {
+  final String name;
+  final TextAlign align;
+  final VoidCallback? onTap;
 
-class _OddsBox extends StatelessWidget {
-  final MatchModel match;
-  final bool isFinished;
-
-  const _OddsBox({required this.match, required this.isFinished});
+  const _TeamName({
+    required this.name,
+    required this.align,
+    this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final oddsText = (match.odds != null && match.odds!.isNotEmpty)
-        ? match.odds!
-        : 'N/A';
-
-    return Container(
-      padding: EdgeInsets.symmetric(
-        horizontal: Responsive.sp(context, 8),
-        vertical: Responsive.sp(context, 3),
-      ),
-      decoration: BoxDecoration(
-        color: isFinished
-            ? Colors.white.withValues(alpha: 0.06)
-            : AppColors.primary.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(Responsive.sp(context, 6)),
-        border: Border.all(
-          color: isFinished
-              ? Colors.white.withValues(alpha: 0.08)
-              : AppColors.primary.withValues(alpha: 0.25),
-          width: 0.5,
+    return GestureDetector(
+      onTap: onTap,
+      child: Text(
+        name,
+        textAlign: align,
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        style: LeoTypography.bodyMedium.copyWith(
+          color: AppColors.textPrimary,
+          fontWeight: FontWeight.w600,
         ),
       ),
-      child: Text(
-        'Odds: $oddsText',
-        style: TextStyle(
-          fontSize: Responsive.sp(context, 8),
-          fontWeight: FontWeight.w900,
-          color: isFinished ? AppColors.textGrey : AppColors.primary,
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// LIVE INDICATOR (pill badge)
+// ═══════════════════════════════════════════════════════════════
+class _LiveIndicator extends StatefulWidget {
+  final String label;
+  final bool isLive;
+
+  const _LiveIndicator({required this.label, required this.isLive});
+
+  @override
+  State<_LiveIndicator> createState() => _LiveIndicatorState();
+}
+
+class _LiveIndicatorState extends State<_LiveIndicator>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _animation;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      duration: const Duration(seconds: 2),
+      vsync: this,
+    )..repeat(reverse: true);
+    _animation = Tween<double>(begin: 1.0, end: 0.4).animate(_controller);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final color = widget.isLive ? AppColors.liveRed : AppColors.warning;
+    return FadeTransition(
+      opacity: widget.isLive ? _animation : const AlwaysStoppedAnimation(1.0),
+      child: Container(
+        padding: const EdgeInsets.symmetric(
+          horizontal: SpacingScale.sm,
+          vertical: SpacingScale.xs,
+        ),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.15),
+          borderRadius: BorderRadius.circular(SpacingScale.chipRadius),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 6,
+              height: 6,
+              decoration: BoxDecoration(
+                color: color,
+                shape: BoxShape.circle,
+              ),
+            ),
+            const SizedBox(width: SpacingScale.xs),
+            Text(
+              widget.label,
+              style: LeoTypography.labelSmall.copyWith(
+                color: color,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ],
         ),
       ),
     );

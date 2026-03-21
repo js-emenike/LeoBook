@@ -56,7 +56,7 @@ EXPAND_DROPDOWN_JS = """
 """
 
 
-def _is_streamer_alive() -> bool:
+def is_streamer_alive() -> bool:
     """Check if the streamer process is alive via PID existence + heartbeat age."""
     try:
         if os.path.exists(_STREAMER_HEARTBEAT_FILE):

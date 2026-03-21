@@ -218,18 +218,18 @@ class _AccuracyReportCardState extends State<AccuracyReportCard> {
       final acc = e.value.where((m) => m.isPredictionAccurate).length;
       final pct = e.value.isNotEmpty ? acc / e.value.length : 0.0;
 
-      // Extract region and league name
+      // Extract country and league name
       String rawName = e.key;
-      String region = "";
+      String country = "";
       String leagueName = rawName;
 
       if (rawName.contains(':')) {
         final parts = rawName.split(':');
-        region = parts.first.trim();
+        country = parts.first.trim();
         leagueName = parts.last.trim();
       } else if (rawName.contains('-')) {
         final parts = rawName.split('-');
-        region = parts.first.trim();
+        country = parts.first.trim();
         leagueName = parts.sublist(1).join('-').trim();
       }
 
@@ -243,7 +243,7 @@ class _AccuracyReportCardState extends State<AccuracyReportCard> {
       }
 
       return _LeagueAccData(
-        region: region,
+        country: country,
         league: leagueName,
         percentage: pct,
         color: colors[i % colors.length],
@@ -340,7 +340,7 @@ class _AccuracyReportCardState extends State<AccuracyReportCard> {
 }
 
 class _LeagueAccData {
-  final String region;
+  final String country;
   final String league;
   final double percentage;
   final Color color;
@@ -348,7 +348,7 @@ class _LeagueAccData {
   final String? crestUrl;
 
   const _LeagueAccData({
-    required this.region,
+    required this.country,
     required this.league,
     required this.percentage,
     required this.color,
@@ -413,9 +413,9 @@ class _ExpandedLeagueList extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      if (l.region.isNotEmpty)
+                      if (l.country.isNotEmpty)
                         Text(
-                          l.region.toUpperCase(),
+                          l.country.toUpperCase(),
                           style: TextStyle(
                             fontSize: Responsive.sp(context, 6),
                             fontWeight: FontWeight.w600,
@@ -527,7 +527,7 @@ class _LeagueAccuracyGrid extends StatelessWidget {
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 4),
                   child: _LeagueAccuracy(
-                    region: l.region,
+                    country: l.country,
                     league: l.league.length > 12
                         ? l.league.substring(0, 12).toUpperCase()
                         : l.league.toUpperCase(),
@@ -575,7 +575,7 @@ class _SectionHeader extends StatelessWidget {
 }
 
 class _LeagueAccuracy extends StatelessWidget {
-  final String region;
+  final String country;
   final String league;
   final double percentage;
   final Color color;
@@ -583,7 +583,7 @@ class _LeagueAccuracy extends StatelessWidget {
   final String? crestUrl;
 
   const _LeagueAccuracy({
-    required this.region,
+    required this.country,
     required this.league,
     required this.percentage,
     required this.color,
@@ -611,9 +611,9 @@ class _LeagueAccuracy extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    if (region.isNotEmpty)
+                    if (country.isNotEmpty)
                       Text(
-                        region.toUpperCase(),
+                        country.toUpperCase(),
                         style: TextStyle(
                           fontSize: Responsive.sp(context, 5),
                           fontWeight: FontWeight.w600,

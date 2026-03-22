@@ -4,6 +4,7 @@
 # Classes: SyncManager
 # Functions: run_full_sync()
 
+import asyncio
 import logging
 import sys
 import pandas as pd
@@ -258,7 +259,7 @@ class SyncManager:
             print(f"   [{remote_table}] FORCE FULL PULL -- counting... (paginating until exhausted)")
 
         total_pulled = 0
-        page_size = 15000  # Supabase may return fewer; we paginate by actual len(rows)
+        page_size = 5000   # Smaller pages avoid Supabase statement timeouts at high offsets
         offset = 0
         disable_pbar = not logger.isEnabledFor(logging.INFO)
         # Route tqdm to the original terminal stream, bypassing RotatingSegmentLogger.
@@ -277,27 +278,41 @@ class SyncManager:
 
         try:
             while True:
-                try:
-                    res = self.supabase.table(remote_table).select("*").order(
-                        key_field, desc=False
-                    ).limit(page_size).offset(offset).execute()
-                    rows = res.data
-                    if not rows:
-                        break
+                max_retries = 3
+                for attempt in range(max_retries + 1):
+                    try:
+                        res = self.supabase.table(remote_table).select("*").order(
+                            key_field, desc=False
+                        ).limit(page_size).offset(offset).execute()
+                        rows = res.data
+                        break  # success
+                    except Exception as batch_err:
+                        err_str = str(batch_err)
+                        if 'PGRST205' in err_str or 'Could not find the table' in err_str:
+                            logger.info(f"    [AUTO] Table '{remote_table}' missing -- skipping.")
+                            pbar.close()
+                            return total_pulled
+                        is_timeout = '57014' in err_str or 'timeout' in err_str.lower() or '500' in err_str
+                        if is_timeout and attempt < max_retries:
+                            wait = 2 ** (attempt + 1)  # 2s, 4s, 8s
+                            page_size = max(1000, page_size // 2)  # shrink page
+                            logger.warning(f"    [RETRY {attempt+1}/{max_retries}] Timeout at offset {offset}, "
+                                           f"retrying in {wait}s with page_size={page_size}")
+                            await asyncio.sleep(wait)
+                        else:
+                            raise batch_err
+                else:
+                    break  # exhausted retries without success or raise
 
-                    self._upsert_rows_to_sqlite(local_table, key_field, rows)
-                    total_pulled += len(rows)
-                    pbar.update(len(rows))
+                if not rows:
+                    break
 
-                    # Advance by ACTUAL rows received, not requested page_size
-                    offset += len(rows)
-                except Exception as batch_err:
-                    err_str = str(batch_err)
-                    if 'PGRST205' in err_str or 'Could not find the table' in err_str:
-                        logger.info(f"    [AUTO] Table '{remote_table}' missing -- skipping.")
-                        break
-                    else:
-                        raise batch_err
+                self._upsert_rows_to_sqlite(local_table, key_field, rows)
+                total_pulled += len(rows)
+                pbar.update(len(rows))
+
+                # Advance by ACTUAL rows received, not requested page_size
+                offset += len(rows)
 
             pbar.close()
             if total_pulled > 0:

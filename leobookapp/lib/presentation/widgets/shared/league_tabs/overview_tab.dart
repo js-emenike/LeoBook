@@ -35,7 +35,15 @@ class _LeagueOverviewTabState extends State<LeagueOverviewTab> {
 
   Future<void> _loadData() async {
     final repo = context.read<DataRepository>();
-    final standings = await repo.fetchStandings(leagueId: widget.leagueId);
+
+    // Fetch league info first to get the current season
+    final league = await repo.fetchLeagueById(widget.leagueId);
+    final currentSeason = league?.currentSeason;
+
+    final standings = await repo.fetchStandings(
+      leagueId: widget.leagueId,
+      season: currentSeason,
+    );
 
     // Trust the DB position — no custom re-sort.
     // Only sort as a safety fallback if positions are all 0 (unset).

@@ -28,9 +28,9 @@ class LeagueModel {
     this.url,
   });
 
-  /// The region_league display string (e.g. "Europe: Premier League")
+  /// The country:league display string (e.g. "Albania: Abissnet Superiore")
   String get regionLeague =>
-      continent != null && continent!.isNotEmpty ? '$continent: $name' : name;
+      region != null && region!.isNotEmpty ? '$region: $name' : name;
 
   factory LeagueModel.fromJson(Map<String, dynamic> json) {
     return LeagueModel(

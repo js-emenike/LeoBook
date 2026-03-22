@@ -110,43 +110,53 @@ class _MainScreenState extends State<MainScreen> {
 
   Widget _buildFloatingNavBar(bool isDark) {
     return Container(
-      height: Responsive.sp(context, 48),
+      height: Responsive.sp(context, 56),
       margin: EdgeInsets.fromLTRB(
         Responsive.sp(context, 16),
         0,
         Responsive.sp(context, 16),
-        Responsive.sp(context, 24), // Lifted off the bottom
+        Responsive.sp(context, 24),
       ),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(Responsive.sp(context, 24)),
+        borderRadius: BorderRadius.circular(Responsive.sp(context, 28)),
         child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+          filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
           child: Container(
             decoration: BoxDecoration(
-              color: isDark
-                  ? const Color(0xFF162130).withValues(alpha: 0.85) // Deep navy
-                  : Colors.white.withValues(alpha: 0.85),
-              borderRadius: BorderRadius.circular(Responsive.sp(context, 24)),
+              gradient: isDark
+                  ? const LinearGradient(
+                      colors: [Color(0xFF0D1B2A), Color(0xFF1B2838)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    )
+                  : LinearGradient(
+                      colors: [
+                        Colors.white.withValues(alpha: 0.92),
+                        Colors.white.withValues(alpha: 0.85),
+                      ],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+              borderRadius: BorderRadius.circular(Responsive.sp(context, 28)),
               border: Border.all(
                 color: isDark
-                    ? Colors.white.withValues(alpha: 0.08)
-                    : Colors.black.withValues(alpha: 0.05),
+                    ? AppColors.primary.withValues(alpha: 0.12)
+                    : Colors.black.withValues(alpha: 0.06),
                 width: 0.5,
               ),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.2),
-                  blurRadius: 10,
-                  offset: const Offset(0, 4),
+                  color: Colors.black.withValues(alpha: 0.25),
+                  blurRadius: 16,
+                  offset: const Offset(0, 6),
                 ),
               ],
             ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: [
-                _buildNavItem(0, Icons.chat_bubble_rounded, "HOME",
-                    badge: "19"),
-                _buildNavItem(1, Icons.science_rounded, "RULES"),
+                _buildNavItem(0, Icons.home_rounded, "HOME"),
+                _buildNavItem(1, Icons.auto_graph_rounded, "RULES"),
                 _buildNavItem(2, Icons.emoji_events_rounded, "TOP"),
                 _buildNavItem(3, Icons.person_rounded, "PROFILE"),
               ],
@@ -157,8 +167,7 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
-  Widget _buildNavItem(int index, IconData icon, String label,
-      {String? badge}) {
+  Widget _buildNavItem(int index, IconData icon, String label) {
     final isSelected = _currentIndex == index;
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
@@ -169,79 +178,48 @@ class _MainScreenState extends State<MainScreen> {
       },
       behavior: HitTestBehavior.opaque,
       child: Container(
-        padding: EdgeInsets.symmetric(horizontal: Responsive.sp(context, 10)),
+        padding: EdgeInsets.symmetric(horizontal: Responsive.sp(context, 12)),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Stack(
-              clipBehavior: Clip.none,
-              children: [
-                AnimatedContainer(
-                  duration: const Duration(milliseconds: 300),
-                  padding: EdgeInsets.symmetric(
-                    horizontal: Responsive.sp(context, 14),
-                    vertical: Responsive.sp(context, 4),
-                  ),
-                  decoration: BoxDecoration(
-                    color: isSelected
-                        ? AppColors.primary.withValues(alpha: 0.2)
-                        : Colors.transparent,
-                    borderRadius: BorderRadius.circular(20),
-                    boxShadow: isSelected
-                        ? [
-                            BoxShadow(
-                              color: AppColors.primary.withValues(alpha: 0.1),
-                              blurRadius: 10,
-                              spreadRadius: 2,
-                            )
-                          ]
-                        : [],
-                  ),
-                  child: Icon(
-                    icon,
-                    size: Responsive.sp(context, 15),
-                    color: isSelected
-                        ? AppColors.primary
-                        : (isDark ? Colors.white54 : Colors.black45),
-                  ),
-                ),
-                if (badge != null)
-                  Positioned(
-                    top: -5,
-                    right: 2,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 4, vertical: 1),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF3B82F6), // Blue badge
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      constraints: BoxConstraints(
-                        minWidth: Responsive.sp(context, 10),
-                      ),
-                      child: Text(
-                        badge,
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: Responsive.sp(context, 5.5),
-                          fontWeight: FontWeight.bold,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-                  ),
-              ],
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 250),
+              curve: Curves.easeOutCubic,
+              padding: EdgeInsets.symmetric(
+                horizontal: Responsive.sp(context, 14),
+                vertical: Responsive.sp(context, 5),
+              ),
+              decoration: BoxDecoration(
+                gradient: isSelected
+                    ? LinearGradient(
+                        colors: [
+                          AppColors.primary.withValues(alpha: 0.25),
+                          AppColors.primary.withValues(alpha: 0.10),
+                        ],
+                      )
+                    : null,
+                color: isSelected ? null : Colors.transparent,
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Icon(
+                icon,
+                size: Responsive.sp(context, 18),
+                color: isSelected
+                    ? AppColors.primary
+                    : (isDark ? Colors.white38 : Colors.black38),
+              ),
             ),
             SizedBox(height: Responsive.sp(context, 2)),
             Text(
               label,
               style: TextStyle(
-                fontSize: Responsive.sp(context, 5.5),
-                fontWeight: isSelected ? FontWeight.w900 : FontWeight.w600,
+                fontFamily: 'DM Sans',
+                fontSize: Responsive.sp(context, 6),
+                fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
                 color: isSelected
                     ? AppColors.primary
-                    : (isDark ? Colors.white38 : Colors.black38),
-                letterSpacing: 0.2,
+                    : (isDark ? Colors.white24 : Colors.black26),
+                letterSpacing: 0.5,
               ),
             ),
           ],

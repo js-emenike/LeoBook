@@ -7,7 +7,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:provider/provider.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:leobookapp/core/constants/app_colors.dart';
@@ -15,10 +14,7 @@ import 'package:leobookapp/core/constants/responsive_constants.dart';
 import 'package:leobookapp/core/constants/spacing_constants.dart';
 import 'package:leobookapp/core/theme/leo_typography.dart';
 import 'package:leobookapp/data/models/match_model.dart';
-import 'package:leobookapp/data/repositories/data_repository.dart';
 import '../../screens/match_details_screen.dart';
-import '../../screens/team_screen.dart';
-import '../../screens/league_screen.dart';
 
 class MatchCard extends StatefulWidget {
   final MatchModel match;
@@ -217,31 +213,16 @@ class _MatchCardState extends State<MatchCard> {
                 errorWidget: (_, __, ___) => const SizedBox.shrink(),
               ),
             ),
-          // League name (tappable)
+          // League name
           Expanded(
-            child: GestureDetector(
-              onTap: () {
-                if (match.league != null && match.league!.isNotEmpty) {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => LeagueScreen(
-                        leagueId: match.league!,
-                        leagueName: match.league!,
-                      ),
-                    ),
-                  );
-                }
-              },
-              child: Text(
-                country.isNotEmpty ? '$country: $leagueName' : leagueName,
-                style: LeoTypography.labelSmall.copyWith(
-                  color: AppColors.textTertiary,
-                  letterSpacing: 0.3,
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+            child: Text(
+              country.isNotEmpty ? '$country: $leagueName' : leagueName,
+              style: LeoTypography.labelSmall.copyWith(
+                color: AppColors.textTertiary,
+                letterSpacing: 0.3,
               ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
           ),
           // Live badge or Accurate badge
@@ -290,7 +271,6 @@ class _MatchCardState extends State<MatchCard> {
           child: _TeamName(
             name: match.homeTeam,
             align: TextAlign.right,
-            onTap: () => _navigateToTeam(context, match.homeTeam),
           ),
         ),
         SizedBox(width: Responsive.sp(context, 6)),
@@ -317,7 +297,6 @@ class _MatchCardState extends State<MatchCard> {
           child: _TeamName(
             name: match.awayTeam,
             align: TextAlign.left,
-            onTap: () => _navigateToTeam(context, match.awayTeam),
           ),
         ),
       ],
@@ -556,17 +535,6 @@ class _MatchCardState extends State<MatchCard> {
     );
   }
 
-  void _navigateToTeam(BuildContext context, String teamName) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => TeamScreen(
-          teamName: teamName,
-          repository: context.read<DataRepository>(),
-        ),
-      ),
-    );
-  }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -638,27 +606,22 @@ class _TeamCrest extends StatelessWidget {
 class _TeamName extends StatelessWidget {
   final String name;
   final TextAlign align;
-  final VoidCallback? onTap;
 
   const _TeamName({
     required this.name,
     required this.align,
-    this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Text(
-        name,
-        textAlign: align,
-        maxLines: 2,
-        overflow: TextOverflow.ellipsis,
-        style: LeoTypography.bodyMedium.copyWith(
-          color: AppColors.textPrimary,
-          fontWeight: FontWeight.w600,
-        ),
+    return Text(
+      name,
+      textAlign: align,
+      maxLines: 2,
+      overflow: TextOverflow.ellipsis,
+      style: LeoTypography.bodyMedium.copyWith(
+        color: AppColors.textPrimary,
+        fontWeight: FontWeight.w600,
       ),
     );
   }

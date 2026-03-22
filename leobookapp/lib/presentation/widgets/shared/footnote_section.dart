@@ -23,9 +23,11 @@ class FootnoteSection extends StatelessWidget {
           sigmaY: LiquidGlassTheme.blurRadiusMedium,
         ),
         child: Container(
-          padding: EdgeInsets.symmetric(
-            horizontal: Responsive.sp(context, 20),
-            vertical: Responsive.sp(context, 40),
+          padding: EdgeInsets.only(
+            left: Responsive.sp(context, 20),
+            right: Responsive.sp(context, 20),
+            top: Responsive.sp(context, 40),
+            bottom: Responsive.sp(context, 80), // Clear floating nav bar
           ),
           decoration: BoxDecoration(
             color:

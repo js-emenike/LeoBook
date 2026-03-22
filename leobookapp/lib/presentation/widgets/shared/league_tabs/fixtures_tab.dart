@@ -31,7 +31,26 @@ class _LeagueFixturesTabState extends State<LeagueFixturesTab> {
   @override
   void initState() {
     super.initState();
-    _matchesFuture = context.read<DataRepository>().fetchMatches();
+    _matchesFuture = _loadFixtures();
+  }
+
+  Future<List<MatchModel>> _loadFixtures() async {
+    final repo = context.read<DataRepository>();
+    final allMatches = await repo.fetchFixturesByLeague(widget.leagueId);
+    // Only upcoming/scheduled (exclude finished)
+    return allMatches
+        .where((m) =>
+            m.status != 'Finished' &&
+            m.displayStatus != 'FINISHED' &&
+            !m.isFinished)
+        .toList()
+      ..sort((a, b) {
+        try {
+          return DateTime.parse(a.date).compareTo(DateTime.parse(b.date));
+        } catch (_) {
+          return 0;
+        }
+      });
   }
 
   @override
@@ -47,10 +66,7 @@ class _LeagueFixturesTabState extends State<LeagueFixturesTab> {
           return Center(child: Text('Error: ${snapshot.error}'));
         }
 
-        final allMatches = snapshot.data ?? [];
-        final matches = allMatches
-            .where((m) => m.leagueId == widget.leagueId || m.league == widget.leagueName)
-            .toList();
+        final matches = snapshot.data ?? [];
 
         if (matches.isEmpty) {
           return Center(
@@ -71,36 +87,15 @@ class _LeagueFixturesTabState extends State<LeagueFixturesTab> {
           );
         }
 
-        return ListView(
+        return ListView.builder(
           padding: const EdgeInsets.only(top: 16, bottom: 32),
-          children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    "MATCHDAY 25",
-                    style: GoogleFonts.lexend(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w800,
-                      color: AppColors.textGrey,
-                      letterSpacing: 1.2,
-                    ),
-                  ),
-                  Text(
-                    "FEB 08 - FEB 10",
-                    style: GoogleFonts.lexend(
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.primary,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            ...matches.map((match) => MatchCard(match: match)),
-          ],
+          itemCount: matches.length,
+          itemBuilder: (context, index) {
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: MatchCard(match: matches[index]),
+            );
+          },
         );
       },
     );

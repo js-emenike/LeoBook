@@ -37,13 +37,15 @@ class _LeagueResultsTabState extends State<LeagueResultsTab> {
 
   Future<List<MatchModel>> _loadResults() async {
     final repo = context.read<DataRepository>();
-    final allMatches = await repo.fetchMatches();
+    final allMatches = await repo.fetchFixturesByLeague(
+      widget.leagueId,
+      season: widget.season,
+    );
     return allMatches
         .where((m) =>
-            (m.leagueId == widget.leagueId || m.league == widget.leagueName) &&
-            (m.status == 'Finished' ||
-                m.displayStatus == 'FINISHED' ||
-                m.isFinished))
+            m.status == 'Finished' ||
+            m.displayStatus == 'FINISHED' ||
+            m.isFinished)
         .toList()
       ..sort((a, b) {
         try {

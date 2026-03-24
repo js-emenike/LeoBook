@@ -100,6 +100,7 @@ SUPABASE_SCHEMA = {
     'live_scores': """
         CREATE TABLE IF NOT EXISTS public.live_scores (
             fixture_id TEXT PRIMARY KEY,
+            date TEXT, match_time TEXT,
             home_team TEXT, away_team TEXT,
             home_score TEXT, away_score TEXT, minute TEXT,
             status TEXT, country_league TEXT, match_link TEXT, timestamp TEXT,

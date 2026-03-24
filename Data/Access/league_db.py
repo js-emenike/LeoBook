@@ -884,13 +884,17 @@ def upsert_live_score(conn: sqlite3.Connection, data: Dict[str, Any]):
     """Insert or update a live score entry."""
     now = now_ng().isoformat()
     conn.execute(
-        """INSERT INTO live_scores (fixture_id, home_team, away_team,
+        """INSERT INTO live_scores (fixture_id, date, match_time,
+               home_team, away_team,
                home_score, away_score, minute, status,
                country_league, match_link, timestamp, last_updated)
-           VALUES (:fixture_id, :home_team, :away_team,
+           VALUES (:fixture_id, :date, :match_time,
+               :home_team, :away_team,
                :home_score, :away_score, :minute, :status,
                :country_league, :match_link, :timestamp, :last_updated)
            ON CONFLICT(fixture_id) DO UPDATE SET
+               date           = COALESCE(excluded.date, live_scores.date),
+               match_time     = COALESCE(excluded.match_time, live_scores.match_time),
                home_score     = excluded.home_score,
                away_score     = excluded.away_score,
                minute         = excluded.minute,
@@ -900,6 +904,8 @@ def upsert_live_score(conn: sqlite3.Connection, data: Dict[str, Any]):
         """,
         {
             "fixture_id": data["fixture_id"],
+            "date": data.get("date"),
+            "match_time": data.get("match_time"),
             "home_team": data.get("home_team"),
             "away_team": data.get("away_team"),
             "home_score": data.get("home_score"),

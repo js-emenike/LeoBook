@@ -160,6 +160,8 @@ _SCHEMA_SQL = """
 
     CREATE TABLE IF NOT EXISTS live_scores (
         fixture_id          TEXT PRIMARY KEY,
+        date                TEXT,
+        match_time          TEXT,
         home_team           TEXT,
         away_team           TEXT,
         home_score          TEXT,
@@ -297,6 +299,8 @@ _ALTER_MIGRATIONS = [
     ("predictions", "statistical_edge", "REAL"),
     ("predictions", "pure_model_suggestion", "TEXT"),
     ("predictions", "is_available", "INTEGER DEFAULT 0"),
+    ("live_scores", "date", "TEXT"),
+    ("live_scores", "match_time", "TEXT"),
 ]
 
 # ── CSV → SQLite import map REMOVED (v7.0) ───────────────────────────────────

@@ -510,14 +510,14 @@ async def _catch_up_from_live_stream(page: Page, sync: SyncManager):
 @AIGOSuite.aigo_retry(max_retries=2, delay=30.0, use_aigo=False)
 async def live_score_streamer(playwright: Playwright, user_data_dir: str = None):
     """
-    Main streaming loop v3.2 (Mobile Optimized).
-    - Headless browser with iPhone 12 emulation.
+    Main streaming loop v3.4 (Desktop Optimized).
+    - Headless browser with desktop viewport (1920×1080).
     - 60s extraction interval.
     - SQLite persistence + Supabase sync.
     - Recycles browser every 3 cycles.
     """
-    print(f"\n   [Streamer] Mobile Live Score Streamer v3.3 starting (Headless, 60s, isolation={'ON' if user_data_dir else 'OFF'})...")
-    log_audit_event("STREAMER_START", f"Mobile live score streamer v3.3 initialized (Isolation: {bool(user_data_dir)}).")
+    print(f"\n   [Streamer] Desktop Live Score Streamer v3.4 starting (Headless, 60s, isolation={'ON' if user_data_dir else 'OFF'})...")
+    log_audit_event("STREAMER_START", f"Desktop live score streamer v3.4 initialized (Isolation: {bool(user_data_dir)}).")
 
     global _last_push_sig
     RECYCLE_INTERVAL = 3
@@ -529,24 +529,30 @@ async def live_score_streamer(playwright: Playwright, user_data_dir: str = None)
         context = None
         try:
             print(f"   [Streamer] Starting fresh browser session (Cycle {cycle + 1})...")
-            iphone_12 = {k: v for k, v in playwright.devices['iPhone 12'].items()
-                         if k != 'default_browser_type'}
+            desktop_ctx_opts = {
+                "user_agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                ),
+                "viewport": {"width": 1920, "height": 1080},
+                "timezone_id": "Africa/Lagos",
+            }
 
             if user_data_dir:
                 context = await playwright.chromium.launch_persistent_context(
                     user_data_dir, headless=True,
                     args=["--disable-dev-shm-usage", "--no-sandbox"],
-                    **iphone_12, timezone_id="Africa/Lagos",
+                    **desktop_ctx_opts,
                 )
                 page = context.pages[0] if context.pages else await context.new_page()
             else:
                 browser = await playwright.chromium.launch(
                     headless=True, args=["--disable-dev-shm-usage", "--no-sandbox"],
                 )
-                context = await browser.new_context(**iphone_12, timezone_id="Africa/Lagos")
+                context = await browser.new_context(**desktop_ctx_opts)
                 page = await context.new_page()
 
-            print("   [Streamer] Navigating to Flashscore (Mobile view, up to 3 mins)...")
+            print("   [Streamer] Navigating to Flashscore (Desktop view, up to 3 mins)...")
             await page.goto(FLASHSCORE_URL, timeout=NAVIGATION_TIMEOUT, wait_until="domcontentloaded")
 
             try:
@@ -596,6 +602,8 @@ async def live_score_streamer(playwright: Playwright, user_data_dir: str = None)
                         print(msg + " entries.")
 
                         for m in live_matches:
+                            if not m.get('date'):
+                                m['date'] = now_ng().strftime('%Y-%m-%d')
                             save_live_score_entry(m)
 
                         sched_upd, pred_upd = _propagate_status_updates(

@@ -100,8 +100,8 @@ SELECT USING (auth.uid () = user_id);
 -- 3. CORE DATA TABLES (mirrors db_helpers.py files_and_headers exactly)
 -- =============================================================================
 
--- predictions (37 columns) — CSV key: fixture_id
--- Note: CSV "over_2.5" → Supabase "over_2_5" (dots illegal in PostgreSQL identifiers)
+-- predictions — keyed by fixture_id
+-- Note: "over_2.5" stored as "over_2_5" (dots illegal in PostgreSQL identifiers)
 CREATE TABLE IF NOT EXISTS public.predictions (
     fixture_id TEXT PRIMARY KEY,
     date TEXT,
@@ -142,10 +142,45 @@ CREATE TABLE IF NOT EXISTS public.predictions (
     league_stage TEXT,
     home_score TEXT,
     away_score TEXT,
-    last_updated TIMESTAMP
-    WITH
-        TIME ZONE DEFAULT NOW ()
+    generated_at TEXT,
+    chosen_market TEXT,
+    market_id TEXT,
+    rule_explanation TEXT,
+    override_reason TEXT,
+    statistical_edge DOUBLE PRECISION,
+    pure_model_suggestion TEXT,
+    is_available SMALLINT DEFAULT 0,
+    last_updated TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+-- Idempotent migrations: add columns introduced after initial schema deployment
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='predictions' AND column_name='generated_at') THEN
+        ALTER TABLE public.predictions ADD COLUMN generated_at TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='predictions' AND column_name='chosen_market') THEN
+        ALTER TABLE public.predictions ADD COLUMN chosen_market TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='predictions' AND column_name='market_id') THEN
+        ALTER TABLE public.predictions ADD COLUMN market_id TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='predictions' AND column_name='rule_explanation') THEN
+        ALTER TABLE public.predictions ADD COLUMN rule_explanation TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='predictions' AND column_name='override_reason') THEN
+        ALTER TABLE public.predictions ADD COLUMN override_reason TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='predictions' AND column_name='statistical_edge') THEN
+        ALTER TABLE public.predictions ADD COLUMN statistical_edge DOUBLE PRECISION;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='predictions' AND column_name='pure_model_suggestion') THEN
+        ALTER TABLE public.predictions ADD COLUMN pure_model_suggestion TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='predictions' AND column_name='is_available') THEN
+        ALTER TABLE public.predictions ADD COLUMN is_available SMALLINT DEFAULT 0;
+    END IF;
+EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'predictions column migration skipped: %', SQLERRM;
+END $$;
 
 ALTER TABLE public.predictions ENABLE ROW LEVEL SECURITY;
 

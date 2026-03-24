@@ -121,6 +121,29 @@ def evaluate_market_outcome(prediction: str, home_score: str, away_score: str,
     if p in ("1x", "home or draw", "home_or_draw", "double chance 1x"): return '1' if h >= a else '0'
     if p in ("x2", "away or draw", "away_or_draw", "draw or away", "double chance x2"): return '1' if a >= h else '0'
 
+    # 1b. RL action-space market names (snake_case emitted by trainer RL head)
+    # Double Chance variants
+    if p in ("dc_12",):                          return '1' if h != a else '0'   # home or away wins
+    if p in ("dc_1x",):                          return '1' if h >= a else '0'   # home wins or draw
+    if p in ("dc_x2",):                          return '1' if a >= h else '0'   # away wins or draw
+    # Team-scoring markets
+    if p in ("home_to_score",):                  return '1' if h > 0 else '0'
+    if p in ("away_to_score",):                  return '1' if a > 0 else '0'
+    # Goals totals — underscore AND dot notation (dynamic regex needs spaces, these don't have them)
+    if p in ("over_1_5",  "over_1.5",  "over_1.5_rl"):  return '1' if total > 1.5 else '0'
+    if p in ("under_1_5", "under_1.5", "under_1.5_rl"): return '1' if total < 1.5 else '0'
+    if p in ("over_2_5",  "over_2.5",  "over_2.5_rl"):  return '1' if total > 2.5 else '0'
+    if p in ("under_2_5", "under_2.5", "under_2.5_rl"): return '1' if total < 2.5 else '0'
+    if p in ("over_3_5",  "over_3.5",  "over_3.5_rl"):  return '1' if total > 3.5 else '0'
+    if p in ("under_3_5", "under_3.5", "under_3.5_rl"): return '1' if total < 3.5 else '0'
+    if p in ("over_4_5",  "over_4.5",  "over_4.5_rl"):  return '1' if total > 4.5 else '0'
+    if p in ("under_4_5", "under_4.5", "under_4.5_rl"): return '1' if total < 4.5 else '0'
+    # Team-specific over markets — underscore and dot notation
+    if p in ("away_ov1_5", "away_ov1.5"): return '1' if a > 1.5 else '0'
+    if p in ("home_ov1_5", "home_ov1.5"): return '1' if h > 1.5 else '0'
+    if p in ("away_ov0_5", "away_ov0.5"): return '1' if a > 0 else '0'
+    if p in ("home_ov0_5", "home_ov0.5"): return '1' if h > 0 else '0'
+
     # 2. "Team to win"
     if p.endswith(" to win"):
         team = p.replace(" to win", "").strip()

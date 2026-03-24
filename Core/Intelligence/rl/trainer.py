@@ -84,6 +84,110 @@ MODELS_DIR = PROJECT_ROOT / "Data" / "Store" / "models"
 BASE_MODEL_PATH = MODELS_DIR / "leobook_base.pth"
 TRAINING_CONFIG_PATH = MODELS_DIR / "training_config.json"
 
+# ── Fixture context builder for RL training rows ─────────────────────────────
+# Called once per fixture to enrich the _row dict with form, H2H, xG, standings.
+# All queries target the training connection (SQLite only). No network calls.
+# Standings are cached per country_league via the _standings_cache dict.
+_standings_cache: dict = {}
+
+
+def _build_fixture_context(
+    conn,
+    home_tid: str,
+    away_tid: str,
+    country_league: str,
+    f_date: str,
+    h_score,
+    a_score,
+) -> dict:
+    """Return a dict of enrichment fields for a single training fixture."""
+    import json as _json
+
+    def _safe_int(v):
+        try:
+            return int(v or 0)
+        except (ValueError, TypeError):
+            return 0
+
+    # 1. Form: last 10 completed results for each team BEFORE f_date ───────
+    home_form = conn.execute(
+        """SELECT fixture_id, home_team_id, away_team_id, home_score, away_score
+           FROM schedules
+           WHERE date < ? AND (home_team_id=? OR away_team_id=?)
+             AND home_score IS NOT NULL AND away_score IS NOT NULL
+           ORDER BY date DESC LIMIT 10""",
+        (f_date, home_tid, home_tid)
+    ).fetchall()
+
+    away_form = conn.execute(
+        """SELECT fixture_id, home_team_id, away_team_id, home_score, away_score
+           FROM schedules
+           WHERE date < ? AND (home_team_id=? OR away_team_id=?)
+             AND home_score IS NOT NULL AND away_score IS NOT NULL
+           ORDER BY date DESC LIMIT 10""",
+        (f_date, away_tid, away_tid)
+    ).fetchall()
+
+    # 2. H2H: last 10 head-to-head fixtures ───────────────────────────────
+    h2h = conn.execute(
+        """SELECT fixture_id, home_score, away_score
+           FROM schedules
+           WHERE ((home_team_id=? AND away_team_id=?) OR (home_team_id=? AND away_team_id=?))
+             AND home_score IS NOT NULL AND away_score IS NOT NULL
+           ORDER BY date DESC LIMIT 10""",
+        (home_tid, away_tid, away_tid, home_tid)
+    ).fetchall()
+
+    # 3. Standings snapshot (cached per country_league) ───────────────────
+    global _standings_cache
+    if country_league not in _standings_cache:
+        rows = conn.execute(
+            """SELECT team_name, position, played, wins, draws, losses,
+                      goal_difference, points
+               FROM standings WHERE country_league=? ORDER BY position ASC LIMIT 20""",
+            (country_league,)
+        ).fetchall()
+        _standings_cache[country_league] = [dict(r) for r in rows]
+    standings = _standings_cache[country_league]
+
+    # 4. xG proxy: avg goals scored in last 10 per team ───────────────────
+    def _avg_scored(form_rows, team_id):
+        goals = []
+        for r in form_rows:
+            try:
+                if r["home_team_id"] == team_id:
+                    goals.append(_safe_int(r["home_score"]))
+                else:
+                    goals.append(_safe_int(r["away_score"]))
+            except Exception:
+                pass
+        return round(sum(goals) / len(goals), 2) if goals else 0.0
+
+    xg_home = _avg_scored(home_form, home_tid)
+    xg_away = _avg_scored(away_form, away_tid)
+
+    # 5. Tag strings ──────────────────────────────────────────────────────
+    hfn = len(home_form)
+    afn = len(away_form)
+    h2h_n = len(h2h)
+    st_n = len(standings)
+
+    return {
+        "home_form_n":       hfn,
+        "away_form_n":       afn,
+        "h2h_count":         h2h_n,
+        "h2h_fixture_ids":   _json.dumps([r["fixture_id"] for r in h2h]),
+        "form_fixture_ids":  _json.dumps(
+            [r["fixture_id"] for r in home_form] + [r["fixture_id"] for r in away_form]
+        ),
+        "standings_snapshot": _json.dumps(standings),
+        "xg_home":           xg_home,
+        "xg_away":           xg_away,
+        "home_tags":         f"form:{hfn}" if hfn else "",
+        "away_tags":         f"form:{afn}" if afn else "",
+        "h2h_tags":          f"h2h:{h2h_n}" if h2h_n else "",
+        "standings_tags":    f"standings:{st_n}" if st_n else "",
+    }
 
 
 
@@ -683,7 +787,8 @@ class RLTrainer(TrainerPhasesMixin, TrainerIOMixin):
                     COALESCE(NULLIF(s.away_team_name, ''), t2.name) as a_name,
                     s.home_score, s.away_score,
                     s.season,
-                    s.date, s.time, s.country_league, s.match_link
+                    s.date, s.time, s.country_league, s.match_link,
+                    COALESCE(s.league_stage, '') as league_stage
                 FROM schedules s
                 LEFT JOIN teams t1 ON s.home_team_id = t1.team_id
                 LEFT JOIN teams t2 ON s.away_team_id = t2.team_id
@@ -701,7 +806,7 @@ class RLTrainer(TrainerPhasesMixin, TrainerIOMixin):
             prepped_data = []
 
             def _prepare_fixture(fix):
-                fixture_id, league_id, home_tid, h_name, away_tid, a_name, h_score, a_score, season, f_date, f_time, f_cl, f_link = fix
+                fixture_id, league_id, home_tid, h_name, away_tid, a_name, h_score, a_score, season, f_date, f_time, f_cl, f_link, f_stage = fix
                 # Use a fresh, thread-unique connection to avoid shared-handle closing race conditions
                 t_conn = get_connection()
                 try:
@@ -742,7 +847,7 @@ class RLTrainer(TrainerPhasesMixin, TrainerIOMixin):
                 expert_probs = data["expert_probs"]
                 xg_fair_odds = data["xg_fair_odds"]
 
-                fixture_id, league_id, home_tid, h_name, away_tid, a_name, h_score, a_score, season, f_date, f_time, f_cl, f_link = fix
+                fixture_id, league_id, home_tid, h_name, away_tid, a_name, h_score, a_score, season, f_date, f_time, f_cl, f_link, f_stage = fix
 
                 if active_phase == 1:
                     # Phase 1: pure imitation, no outcome needed
@@ -828,7 +933,8 @@ class RLTrainer(TrainerPhasesMixin, TrainerIOMixin):
                     'market': pred_str,
                     'prediction': pred_str,
                     'country_league': country_league_val,
-                    'confidence': 'High' if metrics.get('max_prob', 0) > 0.6 else 'Medium' if metrics.get('max_prob', 0) > 0.3 else 'Low',
+                    # Recalibrated for 30-action head: uniform=0.033, high conviction>0.20
+                    'confidence': 'High' if metrics.get('max_prob', 0) > 0.20 else 'Medium' if metrics.get('max_prob', 0) > 0.08 else 'Low',
                     'is_correct': is_pred_correct,
                 })
 
@@ -843,6 +949,17 @@ class RLTrainer(TrainerPhasesMixin, TrainerIOMixin):
                     from datetime import datetime as _dt
 
                     _confidence = day_rec_candidates[-1]['confidence']
+
+                    # ── Build enrichment context (form, H2H, standings, xG) ──
+                    _ctx = _build_fixture_context(
+                        conn, home_tid, away_tid, country_league_val, f_date or match_date,
+                        h_score, a_score
+                    )
+
+                    # btts and over_2_5 are known immediately from training scores
+                    _btts = 'Yes' if (int(h_score or 0) > 0 and int(a_score or 0) > 0) else 'No'
+                    _over25 = 'Yes' if (int(h_score or 0) + int(a_score or 0)) > 2 else 'No'
+
                     _row = {
                         'fixture_id': fixture_id,
                         'date': f_date or match_date,
@@ -855,29 +972,30 @@ class RLTrainer(TrainerPhasesMixin, TrainerIOMixin):
                         'prediction': pred_str,
                         'confidence': _confidence,
                         'reason': f'RL Phase {active_phase} training prediction',
-                        'xg_home': 0.0,
-                        'xg_away': 0.0,
-                        'btts': '',
-                        'over_2_5': '',
+                        'xg_home': _ctx['xg_home'],
+                        'xg_away': _ctx['xg_away'],
+                        'btts': _btts,
+                        'over_2_5': _over25,
                         'best_score': f'{h_score}-{a_score}',
                         'top_scores': '',
-                        'home_tags': '',
-                        'away_tags': '',
-                        'h2h_tags': '',
-                        'standings_tags': '',
-                        'h2h_count': 0,
-                        'home_form_n': 0,
-                        'away_form_n': 0,
+                        'home_tags': _ctx['home_tags'],
+                        'away_tags': _ctx['away_tags'],
+                        'h2h_tags': _ctx['h2h_tags'],
+                        'standings_tags': _ctx['standings_tags'],
+                        'h2h_count': _ctx['h2h_count'],
+                        'home_form_n': _ctx['home_form_n'],
+                        'away_form_n': _ctx['away_form_n'],
                         'odds': '',
                         'market_reliability_score': metrics.get('max_prob', 0) * 100,
                         'recommendation_score': 0,
-                        'h2h_fixture_ids': _json.dumps([]),
-                        'form_fixture_ids': _json.dumps([]),
-                        'standings_snapshot': _json.dumps([]),
+                        'h2h_fixture_ids': _ctx['h2h_fixture_ids'],
+                        'form_fixture_ids': _ctx['form_fixture_ids'],
+                        'standings_snapshot': _ctx['standings_snapshot'],
                         'match_link': f_link or '',
-                        'league_stage': '',
+                        'league_stage': f_stage or '',
                         'generated_at': _dt.now().isoformat(),
                         'status': 'pending',
+                        'is_available': 0,
                         'last_updated': _dt.now().isoformat(),
                     }
                     upsert_prediction(conn, _row)

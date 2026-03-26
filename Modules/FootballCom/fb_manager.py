@@ -60,7 +60,6 @@ def _save_checkpoint(batch_idx: int) -> None:
     )
 
 
-from .league_calendar_extractor import extract_league_calendar, build_league_calendar_url
 
 async def run_league_calendar_fixtures_sync(playwright: Playwright, league_ids: Optional[List[str]] = None):
     """
@@ -124,49 +123,18 @@ async def run_league_calendar_fixtures_sync(playwright: Playwright, league_ids: 
                 except Exception as e:
                     print(f"    [Primary] {league_name}: extract failed: {e}")
 
-            # ── Fallback: extract_league_calendar (slower, full calendar) ──
-            if not matches:
-                try:
-                    calendar_url = build_league_calendar_url(country, league_name)
-                    cal_raw = await extract_league_calendar(page, calendar_url)
-                    if cal_raw:
-                        # Normalize calendar format → same shape as schedule
-                        matches = []
-                        for m in cal_raw:
-                            d_str, t_str = "Unknown", "Unknown"
-                            if m.get('date_time') and ' ' in m['date_time']:
-                                d_str, t_str = m['date_time'].split(' ', 1)
-                            matches.append({
-                                'home': m.get('home_team'),
-                                'away': m.get('away_team'),
-                                'date': d_str,
-                                'time': t_str,
-                                'league': league_name,
-                                'url': m.get('match_url'),
-                                'status': m.get('status'),
-                                'score': f"{m.get('home_score')}-{m.get('away_score')}" if m.get('home_score') is not None else "N/A"
-                            })
-                        source = "calendar"
-                except Exception as e:
-                    print(f"    [Fallback] {league_name}: calendar failed: {e}")
-
             # ── Save results ──
             if matches:
-                # Schedule extractor already returns {home, away, date, time, league, url}
-                # Calendar fallback was normalized above — same shape
-                if source == "schedule":
-                    normalized = [{
-                        'home': m.get('home', ''),
-                        'away': m.get('away', ''),
-                        'date': m.get('date', 'Unknown'),
-                        'time': m.get('time', 'Unknown'),
-                        'league': league_name,
-                        'url': m.get('url', ''),
-                        'status': m.get('status', ''),
-                        'score': 'N/A',
-                    } for m in matches]
-                else:
-                    normalized = matches  # calendar fallback already normalized
+                normalized = [{
+                    'home': m.get('home', ''),
+                    'away': m.get('away', ''),
+                    'date': m.get('date', 'Unknown'),
+                    'time': m.get('time', 'Unknown'),
+                    'league': league_name,
+                    'url': m.get('url', ''),
+                    'status': m.get('status', ''),
+                    'score': 'N/A',
+                } for m in matches]
 
                 save_site_matches(normalized)
                 total_discovered += len(normalized)

@@ -331,7 +331,7 @@ def _initialize_countries(conn: sqlite3.Connection):
 # League operations
 # ---------------------------------------------------------------------------
 
-def upsert_league(conn: sqlite3.Connection, data: Dict[str, Any]) -> int:
+def upsert_league(conn: sqlite3.Connection, data: Dict[str, Any], commit: bool = True) -> int:
     """Insert or update a league. Returns the row id."""
     now = now_ng().isoformat()
     cur = conn.execute(
@@ -377,7 +377,8 @@ def upsert_league(conn: sqlite3.Connection, data: Dict[str, Any]) -> int:
             "last_updated": now,
         },
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return cur.lastrowid
 
 
@@ -387,13 +388,14 @@ def get_league_db_id(conn: sqlite3.Connection, league_id: str) -> Optional[int]:
     return row["id"] if row else None
 
 
-def mark_league_processed(conn: sqlite3.Connection, league_id: str):
+def mark_league_processed(conn: sqlite3.Connection, league_id: str, commit: bool = True):
     """Flag a league as fully enriched."""
     conn.execute(
         "UPDATE leagues SET processed = 1, last_updated = ? WHERE league_id = ?",
         (now_ng().isoformat(), league_id),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def get_unprocessed_leagues(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
@@ -471,7 +473,7 @@ def get_stale_leagues(conn: sqlite3.Connection, days: int = 7) -> List[Dict[str,
 # Team operations
 # ---------------------------------------------------------------------------
 
-def upsert_team(conn: sqlite3.Connection, data: Dict[str, Any]) -> int:
+def upsert_team(conn: sqlite3.Connection, data: Dict[str, Any], commit: bool = True) -> int:
     """Insert or update a team by team_id. Returns the row id."""
     now = now_ng().isoformat()
     new_league_ids = data.get("league_ids", [])
@@ -586,7 +588,8 @@ def upsert_team(conn: sqlite3.Connection, data: Dict[str, Any]) -> int:
                     "last_updated": now,
                 },
             )
-    conn.commit()
+    if commit:
+        conn.commit()
     return cur.lastrowid
 
 
@@ -679,7 +682,7 @@ def upsert_fixture(conn: sqlite3.Connection, data: Dict[str, Any]) -> int:
     return cur.lastrowid
 
 
-def bulk_upsert_fixtures(conn: sqlite3.Connection, fixtures: List[Dict[str, Any]]):
+def bulk_upsert_fixtures(conn: sqlite3.Connection, fixtures: List[Dict[str, Any]], commit: bool = True):
     """Batch insert/update fixtures for performance."""
     now = now_ng().isoformat()
     rows = []
@@ -734,7 +737,8 @@ def bulk_upsert_fixtures(conn: sqlite3.Connection, fixtures: List[Dict[str, Any]
         """,
         rows,
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 # ---------------------------------------------------------------------------

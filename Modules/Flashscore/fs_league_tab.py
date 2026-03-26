@@ -16,6 +16,10 @@ from Core.Browser.site_helpers import fs_universal_popup_dismissal
 from Data.Access.league_db import (
     upsert_league, upsert_team, bulk_upsert_fixtures, mark_league_processed,
 )
+from Modules.Flashscore.data_contract import (
+    DataContractViolation, validate_league_metadata,
+    validate_tab_extraction,
+)
 
 from Modules.Flashscore.fs_league_images import (
     _slugify, schedule_image_download, upload_crest_to_supabase,
@@ -43,12 +47,13 @@ TEAM_CRESTS_DIR = os.path.join(CRESTS_DIR, "teams")
 MAX_SHOW_MORE = 50
 
 
-@AIGOSuite.aigo_retry(max_retries=2, delay=3.0)
+@AIGOSuite.aigo_retry(max_retries=3, delay=3.0)
 async def extract_tab(
     page, league_url: str, tab: str, conn,
     league_id: str, season: str, country_code: str,
     country_league: str = "",
     gap_columns: Optional[Set[str]] = None,
+    commit: bool = True,
 ) -> int:
     """Navigate to a league tab, load all rows, extract and persist."""
     url = league_url.rstrip("/") + f"/{tab}/"
@@ -81,6 +86,10 @@ async def extract_tab(
 
     await _expand_show_more(page, selector_mgr, CONTEXT_LEAGUE, MAX_SHOW_MORE)
 
+    # Pre-scan: count DOM rows for row-count parity check
+    scanned_count = await page.locator(row_sel).count()
+    print(f"      [Pre-scan] {scanned_count} DOM rows")
+
     season_ctx = parse_season_string(season)
     season_ctx["tab"] = tab
     season_ctx["selectors"] = tab_selectors
@@ -92,6 +101,10 @@ async def extract_tab(
         return 0
 
     if not matches_raw:
+        if scanned_count > 0:
+            raise DataContractViolation(
+                f"[{tab.upper()}] {scanned_count} rows scanned but 0 extracted"
+            )
         print(f"    [{tab.upper()}] No matches found")
         return 0
 
@@ -117,7 +130,7 @@ async def extract_tab(
             td = {"name": tname, "country_code": country_code, "league_ids": [league_id]}
             if tid:  td["team_id"] = tid
             if turl: td["url"]     = turl
-            upsert_team(conn, td)
+            upsert_team(conn, td, commit=commit)
 
         for tname, ckey in ((home_name, "home_crest_url"), (away_name, "away_crest_url")):
             curl = m.get(ckey, "")
@@ -188,10 +201,21 @@ async def extract_tab(
             "url":            f"https://www.flashscore.com/match/{m.get('fixture_id', '')}/#/match-summary",
             "country_league":  country_league,
             "match_link":     m.get("match_link", ""),
+            # Pass through raw JS fields for contract validation
+            "home_team_url":  home_team_url,
+            "away_team_url":  away_team_url,
+            "home_crest_url": m.get("home_crest_url", ""),
+            "away_crest_url": m.get("away_crest_url", ""),
         })
 
+    # ── Data Contract Validation ──────────────────────────────────────────
+    passed, summary = validate_tab_extraction(scanned_count, fixture_rows, tab)
+    print(f"    {summary}")
+    if not passed:
+        raise DataContractViolation(summary)
+
     if fixture_rows:
-        bulk_upsert_fixtures(conn, fixture_rows)
+        bulk_upsert_fixtures(conn, fixture_rows, commit=commit)
 
     downloaded = 0
     future_to_name = {fut: name for name, (fut, _dest) in crest_pending.items()}
@@ -213,7 +237,8 @@ async def extract_tab(
                         "UPDATE teams SET crest = ? WHERE name = ? AND (country_code IS NULL OR country_code = '')",
                         (cval, tname)
                     )
-                conn.commit()
+                if commit:
+                    conn.commit()
                 downloaded += 1
         except Exception:
             pass
@@ -343,7 +368,7 @@ async def enrich_single_league(
         country = region_name or continent
         country_league = f"{country}: {name}" if country else name
 
-        upsert_league(conn, {
+        league_data = {
             "league_id":      league_id,
             "fs_league_id":   fs_league_id or None,
             "name":           name,
@@ -355,7 +380,17 @@ async def enrich_single_league(
             "region":         region_name or None,
             "region_flag":    region_flag_path or None,
             "region_url":     region_url_href or None,
-        })
+        }
+
+        # ── League Metadata Contract ─────────────────────────────────────
+        lg_passed, lg_violations = validate_league_metadata(league_data)
+        if not lg_passed:
+            raise DataContractViolation(
+                f"League metadata contract failed for {name} ({league_id}):\n"
+                + "\n".join(f"    • {v}" for v in lg_violations)
+            )
+
+        upsert_league(conn, league_data, commit=False)
 
         total_matches = 0
 
@@ -363,9 +398,9 @@ async def enrich_single_league(
         current_is_gap = season and seasons_with_gaps and (season in seasons_with_gaps)
         if current_is_gap or needs_full_re_enrich or not seasons_with_gaps:
             f_c = await extract_tab(page, url, "fixtures", conn, league_id, season, country_code,
-                                    country_league=country_league, gap_columns=gap_columns)
+                                    country_league=country_league, gap_columns=gap_columns, commit=False)
             r_c = await extract_tab(page, url, "results", conn, league_id, season, country_code,
-                                    country_league=country_league, gap_columns=gap_columns)
+                                    country_league=country_league, gap_columns=gap_columns, commit=False)
             total_matches += f_c + r_c
 
         # Handle past seasons (from gaps or from manual request)
@@ -391,13 +426,13 @@ async def enrich_single_league(
                 
                 r_c = await extract_tab(page, s_meta["url"], "results", conn,
                                         league_id, label, country_code,
-                                        country_league=country_league, gap_columns=s_gap_cols)
+                                        country_league=country_league, gap_columns=s_gap_cols, commit=False)
                 f_c = await extract_tab(page, s_meta["url"], "fixtures", conn,
                                         league_id, label, country_code,
-                                        country_league=country_league, gap_columns=s_gap_cols)
+                                        country_league=country_league, gap_columns=s_gap_cols, commit=False)
                 total_matches += r_c + f_c
 
-        mark_league_processed(conn, league_id)
+        mark_league_processed(conn, league_id, commit=False)
         print(f"\n  [{idx}/{total}] [OK] {name} — {total_matches} matches total")
 
     except Exception as e:

@@ -59,15 +59,22 @@ EXTRACT_MATCHES_JS = r"""(ctx) => {
             if (fullM) {
                 matchDate = `${fullM[3]}-${fullM[2]}-${fullM[1]}`; matchTime = `${fullM[4]}:${fullM[5]}`;
             } else {
-                // Pattern 2: Short date+time  "19.03. 14:00"
-                const shortM = raw.match(/(\d{2})\.(\d{2})\.\s*(\d{2}):(\d{2})/);
-                if (shortM) {
-                    const year = inferYear(parseInt(shortM[1]), parseInt(shortM[2]));
-                    matchDate = `${year}-${shortM[2]}-${shortM[1]}`; matchTime = `${shortM[3]}:${shortM[4]}`;
+                // Pattern 1b: Full date only "16.11.2025" (historical results — Flashscore omits
+                // kick-off time for completed matches; time element shows date only with no HH:MM)
+                const dateOnlyM = raw.match(/^(\d{2})\.(\d{2})\.(\d{4})\s*$/);
+                if (dateOnlyM) {
+                    matchDate = `${dateOnlyM[3]}-${dateOnlyM[2]}-${dateOnlyM[1]}`; matchTime = 'FT';
                 } else {
-                    // Pattern 3: Time only  "14:00" (today's matches)
-                    const jt = raw.match(/(\d{2}):(\d{2})/);
-                    if (jt) matchTime = `${jt[1]}:${jt[2]}`;
+                    // Pattern 2: Short date+time  "19.03. 14:00"
+                    const shortM = raw.match(/(\d{2})\.(\d{2})\.\s*(\d{2}):(\d{2})/);
+                    if (shortM) {
+                        const year = inferYear(parseInt(shortM[1]), parseInt(shortM[2]));
+                        matchDate = `${year}-${shortM[2]}-${shortM[1]}`; matchTime = `${shortM[3]}:${shortM[4]}`;
+                    } else {
+                        // Pattern 3: Time only  "14:00" (today's matches)
+                        const jt = raw.match(/(\d{2}):(\d{2})/);
+                        if (jt) matchTime = `${jt[1]}:${jt[2]}`;
+                    }
                 }
             }
             // Ultimate fallback: scan ALL descendant text for a time pattern

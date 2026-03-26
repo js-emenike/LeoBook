@@ -104,24 +104,46 @@ async def _activate_and_wait_for_matches(
     except Exception:
         pass
 
-    # Phase 2: stability-polling scroll (proven, reused from fs_league_hydration)
-    # _scroll_to_load scrolls one full viewport per step, polls every 0.4s,
-    # stops when count is stable for 2s or DOM bottom reached.
-    # CARD_SEL: the selector for scrollable match cards.
-    # Loaded from knowledge.json fb_schedule_page.match_rows with fallback chain.
+    # Phase 2: stability-polling scroll with retry for partial hydration (BUG 4 FIX)
     CARD_SEL = (
         SelectorManager.get_selector("fb_schedule_page", "match_rows")
         or SelectorManager.get_selector("fb_schedule_page", "match_card")
         or SelectorManager.get_selector("fb_schedule_page", "league_section")
         or ".match-card-section.match-card, .match-card, .league-title-wrapper"
     )
-    found = await _recursive_scroll_cards(page, CARD_SEL)
+
+    MAX_HYDRATION_RETRIES = 2
+    found = 0
+    for hydration_attempt in range(1 + MAX_HYDRATION_RETRIES):
+        found = await _recursive_scroll_cards(page, CARD_SEL)
+
+        # Check if we got enough cards
+        if expected_count <= 0 or found >= expected_count:
+            break  # Got all expected cards (or no expectation set)
+
+        if found == 0:
+            break  # Genuinely empty — no point retrying
+
+        if hydration_attempt < MAX_HYDRATION_RETRIES:
+            # Partial hydration — retry with extra wait for lazy-load
+            print(
+                f"    [Extractor] Partial hydration: "
+                f"{found}/{expected_count} cards — retrying "
+                f"({hydration_attempt + 1}/{MAX_HYDRATION_RETRIES})..."
+            )
+            await asyncio.sleep(2.0)  # Wait for lazy-loaded content
+            # Scroll back to top and retry
+            try:
+                await page.evaluate("window.scrollTo(0, 0)")
+                await asyncio.sleep(0.5)
+            except Exception:
+                pass
 
     # Phase 3: result
-    if expected_count > 0 and found < expected_count:
+    if expected_count > 0 and found < expected_count and found > 0:
         print(
             f"    [Extractor] Partial hydration: "
-            f"{found}/{expected_count} cards — proceeding."
+            f"{found}/{expected_count} cards — proceeding (after retries)."
         )
     elif found == 0:
         # Re-check for "no games" message (may have loaded after scroll)

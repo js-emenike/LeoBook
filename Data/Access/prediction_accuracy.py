@@ -46,9 +46,9 @@ def get_market_option(prediction: str, home_team: str, away_team: str) -> str:
     if "Draw No Bet - 1" in pred_str: return "Draw No Bet"
     if "Draw No Bet - 2" in pred_str: return "Draw No Bet"
 
-    pred_lower = prediction.lower()
-    home_lower = home_team.lower()
-    away_lower = away_team.lower()
+    pred_lower = (prediction or '').lower()
+    home_lower = (home_team or '').lower()
+    away_lower = (away_team or '').lower()
 
     if pred_lower == 'home win' or pred_lower == home_lower: # Direct team name often means win
         return "Home Win"

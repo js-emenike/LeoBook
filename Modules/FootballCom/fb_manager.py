@@ -61,26 +61,28 @@ def _save_checkpoint(batch_idx: int) -> None:
 
 
 
-async def run_league_calendar_fixtures_sync(playwright: Playwright, league_ids: Optional[List[str]] = None):
+async def run_league_calendar_fixtures_sync(playwright: Playwright, league_ids: Optional[List[str]] = None) -> set:
     """
     Phase 0: Fixture Discovery — primary via schedule extractor, calendar fallback.
 
     v2 (2026-03-26): Reordered — extract_league_matches (fast, proven) is now
     the primary path. extract_league_calendar is fallback only when primary
     returns 0 matches.
+
+    Returns: set of fb_urls that confirmed NO fixtures (empty leagues).
     """
     print("\n--- Running League Calendar Fixture Sync (Phase 0) ---")
     
     fb_lookup = _load_fb_league_lookup()
     if not fb_lookup:
         print("  [Warning] No fb_url mappings found. Skipping calendar sync.")
-        return
+        return set()
 
     # Filter by league_ids if provided
     to_sync = {lid: entry for lid, entry in fb_lookup.items() if not league_ids or lid in league_ids}
     if not to_sync:
         print("  [Info] No leagues to sync calendar for.")
-        return
+        return set()
 
     print(f"  [Calendar] Syncing {len(to_sync)} league hub calendars...")
 
@@ -96,6 +98,7 @@ async def run_league_calendar_fixtures_sync(playwright: Playwright, league_ids: 
         page = await context.new_page()
         
         total_discovered = 0
+        empty_urls: set = set()  # BUG 2+5: track confirmed-empty league URLs
         for lid, entry in to_sync.items():
             country = entry.get('fb_country')
             league_name = entry.get('fb_league_name')
@@ -141,10 +144,13 @@ async def run_league_calendar_fixtures_sync(playwright: Playwright, league_ids: 
                 print(f"    ✓ {league_name}: {len(normalized)} fixtures saved (via {source}).")
             else:
                 print(f"    ! {league_name}: No fixtures found.")
+                if fb_url:
+                    empty_urls.add(fb_url)
 
         await context.close()
     
-    print(f"  [Calendar] Sync complete. Total fixtures discovered: {total_discovered}")
+    print(f"  [Calendar] Sync complete. Total fixtures discovered: {total_discovered}, empty leagues: {len(empty_urls)}")
+    return empty_urls
 
 
 
@@ -531,10 +537,14 @@ async def run_odds_harvesting(playwright: Playwright):
     # -----------------------------------------------------------------------
     # If not a dry-run, we perform a multi-league calendar sync first to
     # find all upcoming fixtures and match IDs from the most complete source.
+    # BUG 2+5 FIX: Track which leagues Phase 0 confirmed have no fixtures.
+    # These are excluded from the batch phase to avoid wasted navigations
+    # and the "no matches on page" false-empty problem.
+    phase0_empty_leagues: set = set()  # league fb_urls with no fixtures
     from Core.System.guardrails import is_dry_run
     if not is_dry_run():
         try:
-            await run_league_calendar_fixtures_sync(playwright)
+            phase0_empty_leagues = await run_league_calendar_fixtures_sync(playwright)
         except Exception as e:
             print(f"  [Warning] Phase 0 Calendar Sync failed: {e}")
     # -----------------------------------------------------------------------
@@ -555,6 +565,23 @@ async def run_odds_harvesting(playwright: Playwright):
         print(f"  [Resume] Checkpoint found — skipping batches 1–{resume_from}, "
               f"starting at batch {resume_from + 1}/{len(batches)}")
 
+    # BUG 2+5 FIX: Pre-filter leagues that Phase 0 confirmed empty
+    if phase0_empty_leagues:
+        pre_filter_count = len(leagues_to_extract)
+        leagues_to_extract = {
+            lid: fixes for lid, fixes in leagues_to_extract.items()
+            if fb_lookup[lid]['fb_url'] not in phase0_empty_leagues
+        }
+        skipped_empty = pre_filter_count - len(leagues_to_extract)
+        if skipped_empty:
+            print(f"  [Filter] Skipped {skipped_empty} leagues confirmed empty by Phase 0.")
+        # Recalculate totals and batches after filtering
+        total_fixtures = sum(len(v) for v in leagues_to_extract.values())
+        total_leagues = len(leagues_to_extract)
+        league_ids = list(leagues_to_extract.keys())
+        batches = [league_ids[i:i + BATCH_SIZE] for i in range(0, len(league_ids), BATCH_SIZE)]
+        print(f"  [Pipeline] After Phase 0 filter: {total_fixtures} fixtures across {total_leagues} leagues.")
+
     print(f"  [System] Processing {total_leagues} leagues in {len(batches)} batches (Size: {BATCH_SIZE})...")
 
     for batch_idx, batch_ids in enumerate(batches):
@@ -566,7 +593,10 @@ async def run_odds_harvesting(playwright: Playwright):
         context = None
         try:
             context, _ = await _create_session_no_login(playwright)
-            league_sem = asyncio.Semaphore(MAX_CONCURRENCY)
+            # BUG 3 FIX: Force semaphore=1 to prevent concurrent pages
+            # from racing in a shared browser context. Each page's DOM
+            # reads can contaminate other pages when running in parallel.
+            league_sem = asyncio.Semaphore(1)
             
             league_tasks = []
             for lid in batch_ids:
@@ -675,7 +705,7 @@ async def run_odds_harvesting(playwright: Playwright):
             manager = SyncManager()
             await manager._sync_table('fb_matches', TABLE_CONFIG['fb_matches'])
             await manager._sync_table('match_odds', TABLE_CONFIG['match_odds'])
-            print(f"  [Sync] Complete: {len(all_resolved)} matches, {total_session_odds_count} odds outcomes.")
+            print(f"  [Sync] Complete: {len(all_resolved_matches)} matches, {total_session_odds_count} odds outcomes.")
         except Exception as e:
             print(f"  [Sync] [Warning] Supabase push failed: {e}")
 

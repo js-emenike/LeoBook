@@ -126,6 +126,32 @@ async def extract_tab(
         fixture_rows = []
         crest_pending = {}
 
+        # Diagnostic: on first attempt, dump what the DOM actually contains for time elements
+        if attempt == 1:
+            try:
+                diag = await page.evaluate("""(sel) => {
+                    const rows = document.querySelectorAll("[id^='g_1_']");
+                    const timeEls = document.querySelectorAll(sel);
+                    const samples = [];
+                    for (let i = 0; i < Math.min(3, rows.length); i++) {
+                        const row = rows[i];
+                        const te = row.querySelector(sel);
+                        samples.push({
+                            rowId: row.id,
+                            timeElFound: !!te,
+                            outerHTML: te ? te.outerHTML.substring(0, 200) : 'N/A',
+                            innerText: te ? te.innerText : 'N/A',
+                            childNodes: te ? Array.from(te.childNodes).map(n => ({type: n.nodeType, text: n.textContent?.substring(0, 50)})) : []
+                        });
+                    }
+                    return { totalRows: rows.length, totalTimeEls: timeEls.length, samples };
+                }""", tab_selectors.get("match_time", ".event__time"))
+                print(f"      [DIAG] {tab.upper()} DOM: {diag.get('totalRows')} rows, {diag.get('totalTimeEls')} time els")
+                for s in diag.get("samples", []):
+                    print(f"      [DIAG] {s.get('rowId')}: found={s.get('timeElFound')} text={repr(s.get('innerText'))} children={s.get('childNodes')}")
+            except Exception as de:
+                print(f"      [DIAG] Failed: {de}")
+
         try:
             matches_raw = await page.evaluate(EXTRACT_MATCHES_JS, season_ctx)
         except Exception as e:

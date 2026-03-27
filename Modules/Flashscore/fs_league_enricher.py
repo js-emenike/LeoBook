@@ -173,6 +173,7 @@ async def main(
         )
 
         sem           = asyncio.Semaphore(MAX_CONCURRENCY)
+        db_lock       = asyncio.Lock()  # Serialize DB transactions (shared conn)
         crash_counter = 0
         failed_leagues: list = []
         LEAGUE_MAX_RETRIES = 2
@@ -192,19 +193,20 @@ async def main(
                 for attempt in range(1, LEAGUE_MAX_RETRIES + 1):
                     try:
                         # ── Transaction BEGIN ─────────────────────────
-                        conn.execute("BEGIN")
+                        async with db_lock:
+                            conn.execute("BEGIN")
 
-                        await enrich_single_league(
-                            context=ctx, league=league, conn=conn,
-                            idx=idx, total=total, num_seasons=num_seasons,
-                            all_seasons=all_seasons, target_season=target_season,
-                            seasons_with_gaps=s_with_gaps or None,
-                            gap_columns=g_columns or None,
-                            needs_full_re_enrich=needs_full,
-                        )
+                            await enrich_single_league(
+                                context=ctx, league=league, conn=conn,
+                                idx=idx, total=total, num_seasons=num_seasons,
+                                all_seasons=all_seasons, target_season=target_season,
+                                seasons_with_gaps=s_with_gaps or None,
+                                gap_columns=g_columns or None,
+                                needs_full_re_enrich=needs_full,
+                            )
 
-                        # ── Transaction COMMIT ────────────────────────
-                        conn.commit()
+                            # ── Transaction COMMIT ────────────────────────
+                            conn.commit()
                         crash_counter = 0
                         last_error = None
 

@@ -60,18 +60,28 @@ cp "$SOURCE_APK" "$APK_OUTPUT/$APK_NAME"
 cp "$SOURCE_APK" "$APK_OUTPUT/$LATEST_NAME"
 echo "✅ Renamed → $APK_NAME"
 
-# ── Upload to Supabase ────────────────────────────────────────────────────
-# Requires SUPABASE_SERVICE_ROLE_KEY env var
+# ── Load Supabase key from .env if not already set ────────────────────────
+if [ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]; then
+  ENV_FILE="$APP_DIR/.env"
+  if [ -f "$ENV_FILE" ]; then
+    # Extract SUPABASE_SERVICE_ROLE_KEY from .env (handles quotes and spaces)
+    _KEY=$(grep -E '^SUPABASE_SERVICE_ROLE_KEY=' "$ENV_FILE" | head -1 | sed 's/^SUPABASE_SERVICE_ROLE_KEY=//' | tr -d '"' | tr -d "'" | xargs)
+    if [ -n "$_KEY" ]; then
+      export SUPABASE_SERVICE_ROLE_KEY="$_KEY"
+      echo "🔑 Loaded service role key from .env"
+    fi
+  fi
+fi
+
 if [ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]; then
   echo ""
-  echo "⚠️  SUPABASE_SERVICE_ROLE_KEY not set."
-  echo "   Set it to upload automatically:"
-  echo "   export SUPABASE_SERVICE_ROLE_KEY='your-service-role-key'"
+  echo "⚠️  SUPABASE_SERVICE_ROLE_KEY not found in .env or environment."
+  echo "   Add it to leobookapp/.env:"
+  echo "   SUPABASE_SERVICE_ROLE_KEY=your-service-role-key"
   echo ""
-  echo "   Or upload manually to Supabase Dashboard → Storage → $BUCKET:"
-  echo "   1. $APK_OUTPUT/$LATEST_NAME"
-  echo "   2. metadata.json (see below)"
+  echo "   Or export it: export SUPABASE_SERVICE_ROLE_KEY='...'"
   echo ""
+  exit 1
 fi
 
 # Upload APK (as LeoBook-latest.apk — stable URL)

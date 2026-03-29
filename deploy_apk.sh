@@ -67,25 +67,29 @@ cp "$SOURCE_APK" "$APK_OUTPUT/$LATEST_NAME"
 echo "✅ Renamed → $APK_NAME ($APK_SIZE)"
 
 # ── Load Supabase key from .env if not already set ────────────────────────
+# ── Load Supabase key from .env if not already set ────────────────────────
 if [ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]; then
-  ENV_FILE="$APP_DIR/.env"
-  if [ -f "$ENV_FILE" ]; then
-    # Extract SUPABASE_SERVICE_ROLE_KEY from .env (handles quotes and spaces)
-    _KEY=$(grep -E '^SUPABASE_SERVICE_ROLE_KEY=' "$ENV_FILE" | head -1 | sed 's/^SUPABASE_SERVICE_ROLE_KEY=//' | tr -d '"' | tr -d "'" | xargs)
-    if [ -n "$_KEY" ]; then
-      export SUPABASE_SERVICE_ROLE_KEY="$_KEY"
-      echo "🔑 Loaded service role key from .env"
+  # Check in app dir first, then root dir
+  for ENV_FILE in "$APP_DIR/.env" "$SCRIPT_DIR/.env"; do
+    if [ -f "$ENV_FILE" ]; then
+      echo "🔍 Looking for Supabase keys in $ENV_FILE..."
+      # Extract SUPABASE_SERVICE_ROLE_KEY or SUPABASE_SERVICE_KEY (uncommented only)
+      _KEY=$(grep -E '^[[:space:]]*(SUPABASE_SERVICE_ROLE_KEY|SUPABASE_SERVICE_KEY)=' "$ENV_FILE" | head -1 | sed -E 's/^[[:space:]]*(SUPABASE_SERVICE_ROLE_KEY|SUPABASE_SERVICE_KEY)=//' | tr -d '"' | tr -d "'" | xargs || true)
+      
+      if [ -n "$_KEY" ]; then
+        export SUPABASE_SERVICE_ROLE_KEY="$_KEY"
+        echo "🔑 Loaded service role key from $ENV_FILE"
+        break  # STOP after finding the first one
+      fi
     fi
-  fi
+  done
 fi
 
 if [ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]; then
   echo ""
-  echo "⚠️  SUPABASE_SERVICE_ROLE_KEY not found in .env or environment."
-  echo "   Add it to leobookapp/.env:"
-  echo "   SUPABASE_SERVICE_ROLE_KEY=your-service-role-key"
-  echo ""
-  echo "   Or export it: export SUPABASE_SERVICE_ROLE_KEY='...'"
+  echo "❌ ERROR: SUPABASE_SERVICE_ROLE_KEY not found in leobookapp/.env, .env, or environment."
+  echo "   Make sure your .env has:"
+  echo "   SUPABASE_SERVICE_KEY=your-key"
   echo ""
   exit 1
 fi

@@ -1,8 +1,8 @@
 # LeoBook — Chapter & Page File Dependency Map
 
-> **Version**: 9.4.1 · **Last Updated**: 2026-03-26
-> Reflects fully completed modularisation + streamer independence + Ch1 pipeline fixes.
-> Previous version: 9.4 (Flashscore UI parity + design system migration)
+> **Version**: 9.5.0 · **Last Updated**: 2026-03-29
+> Reflects Authentication overhaul + v9.5 "heartbeat" (3s updates) + modularisation.
+> Previous version: 9.4.1 (Ch1 pipeline fixes)
 
 ---
 

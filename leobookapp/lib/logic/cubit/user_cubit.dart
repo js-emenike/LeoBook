@@ -105,6 +105,47 @@ class UserCubit extends Cubit<UserState> {
     }
   }
 
+  // ─── Email Auth ──────────────────────────────────────────────────
+
+  Future<void> signUpWithEmail(String email, String password) async {
+    emit(UserLoading(user: state.user));
+    try {
+      final response = await _authRepo.signUpWithEmail(email, password);
+      if (response.user != null) {
+        emit(UserAuthenticated(
+          user: UserModel.fromSupabaseUser(response.user!),
+        ));
+      } else {
+        // Email confirmation required — user registered but not yet verified
+        emit(UserInitial(user: state.user));
+      }
+    } catch (e) {
+      emit(UserError(
+        user: state.user,
+        message: 'Sign-up failed: ${e.toString()}',
+      ));
+    }
+  }
+
+  Future<void> signInWithEmail(String email, String password) async {
+    emit(UserLoading(user: state.user));
+    try {
+      final response = await _authRepo.signInWithEmail(email, password);
+      if (response.user != null) {
+        emit(UserAuthenticated(
+          user: UserModel.fromSupabaseUser(response.user!),
+        ));
+      } else {
+        emit(UserError(user: state.user, message: 'Email sign-in failed.'));
+      }
+    } catch (e) {
+      emit(UserError(
+        user: state.user,
+        message: e.toString(),
+      ));
+    }
+  }
+
   // ─── Skip (Guest) ───────────────────────────────────────────────
 
   void skipAsGuest() {

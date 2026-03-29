@@ -143,8 +143,8 @@ If it fails — learn, improve, and move forward. If it succeeds — the outcome
 ---
 
 **Document Status**
-- Version: 1.2 — v9.1 reference update
-- System Status: Active Development — Modularisation complete + 14 bugs fixed (2026-03-15)
+- Version: 1.4 — Schema version: v7.0 (2026-03-29)
+- System Status: Active Development — Modularisation complete + v9.5 stable
 - Staircase State Machine: ✅ Implemented in `Core/System/guardrails.py`
 - Chapter Execution: ✅ `Core/System/pipeline.py` (extracted from `Leo.py` in v9.1)
 - Season-Aware RL: ✅ `data_richness_score` per league — scales RL weight with historical depth

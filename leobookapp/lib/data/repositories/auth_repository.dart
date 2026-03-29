@@ -1,8 +1,9 @@
-// auth_repository.dart: Supabase authentication — Google Sign-In + Phone OTP.
+// auth_repository.dart: Supabase authentication — Google, Phone OTP, Email.
 // Part of LeoBook App — Repositories
 //
 // Classes: AuthRepository
 
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter/foundation.dart';
@@ -24,8 +25,8 @@ class AuthRepository {
   /// Sign in with Google via native flow + Supabase ID token exchange.
   Future<AuthResponse> signInWithGoogle() async {
     try {
-      const webClientId = String.fromEnvironment('GOOGLE_WEB_CLIENT_ID');
-      const iosClientId = String.fromEnvironment('GOOGLE_IOS_CLIENT_ID');
+      final webClientId = dotenv.env['GOOGLE_WEB_CLIENT_ID'] ?? '';
+      final iosClientId = dotenv.env['GOOGLE_IOS_CLIENT_ID'] ?? '';
 
       final GoogleSignIn googleSignIn = GoogleSignIn(
         clientId: iosClientId.isEmpty ? null : iosClientId,
@@ -52,6 +53,34 @@ class AuthRepository {
       );
     } catch (e) {
       debugPrint('[AuthRepository] Google Sign-In error: $e');
+      rethrow;
+    }
+  }
+
+  // ─── Email Sign-Up ──────────────────────────────────────────────
+
+  /// Create account with email + password.
+  Future<AuthResponse> signUpWithEmail(String email, String password) async {
+    try {
+      return await _supabase.auth.signUp(
+        email: email,
+        password: password,
+      );
+    } catch (e) {
+      debugPrint('[AuthRepository] Email sign-up error: $e');
+      rethrow;
+    }
+  }
+
+  /// Sign in with existing email + password.
+  Future<AuthResponse> signInWithEmail(String email, String password) async {
+    try {
+      return await _supabase.auth.signInWithPassword(
+        email: email,
+        password: password,
+      );
+    } catch (e) {
+      debugPrint('[AuthRepository] Email sign-in error: $e');
       rethrow;
     }
   }

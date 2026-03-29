@@ -46,7 +46,7 @@ class LeoBookApp extends StatelessWidget {
         RepositoryProvider(create: (context) => NewsRepository()),
       ],
       child: ChangeNotifierProvider(
-        create: (_) => UpdateService()..startPeriodicCheck(intervalSeconds: 15),
+        create: (_) => UpdateService()..startPeriodicCheck(intervalSeconds: 3),
         child: MultiBlocProvider(
           providers: [
             BlocProvider<HomeCubit>(

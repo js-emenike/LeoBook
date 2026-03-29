@@ -35,4 +35,6 @@ python-Levenshtein>=0.12.2
 pytz
 psutil
 tqdm
+twilio
+
 

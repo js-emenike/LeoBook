@@ -3,8 +3,8 @@
 **Developer**: Materialless LLC
 **Chief Engineer**: Emenike Chinenye James
 **Powered by**: Rule Engine + Neural RL Stairway Engine · Gemini Multi-Key (AIGO browser assistant + search enrichment only)
-**Architecture**: v9.4 "Stairway Engine" (All files ≤500 lines · Fully Modular · Season-Aware RL Weighting · Streamer Independence)
-**App Version**: 9.4.0 ([pubspec.yaml](leobookapp/pubspec.yaml) aligned with `LEOBOOK_VERSION` in `Core/Utils/constants.py`)
+**Architecture**: v9.5 "Stairway Engine" (All files ≤500 lines · Fully Modular · Season-Aware RL Weighting · Streamer Independence)
+**App Version**: 9.5.0 ([pubspec.yaml](leobookapp/pubspec.yaml) aligned with `LEOBOOK_VERSION` in `Core/Utils/constants.py`)
 
 ---
 
@@ -23,7 +23,7 @@ For the complete file inventory and step-by-step execution trace, see [docs/LeoB
 
 ---
 
-## System Architecture (v9.4 — Fully Modular · Streamer Independent)
+## System Architecture (v9.5 — Fully Modular · Streamer Independent)
 
 ```
 Leo.py (Entry Point — 473 lines)
@@ -144,7 +144,7 @@ LeoBook/
 │   ├── search_dict_llm.py
 │   └── rl_diagnose.py
 ├── leobookapp/                     # Flutter dashboard
-│   ├── pubspec.yaml                # version: 9.4.0+1
+│   ├── pubspec.yaml                # version: 9.5.0+2
 │   └── lib/
 │       ├── presentation/screens/   # search, league (6 tabs), match (3-col), team
 │       ├── core/widgets/           # LeoLoadingIndicator, LeoShimmer, GlassContainer
@@ -158,7 +158,7 @@ LeoBook/
 
 ---
 
-## Quick Start (v9.4)
+## Quick Start (v9.5)
 
 ### Backend Setup
 
@@ -293,5 +293,5 @@ flutter build apk --release   # Production APK
 ```
 ---
 
-*Last updated: 2026-03-26 — v9.4.1 — Ch1 pipeline bug fixes (6 bugs: NameError typo, NoneType crash, race condition, zero resolution, partial hydration retry, off-season league filter), Flashscore UI parity (round grouping, winner highlighting, red cards)*
+*Last updated: 2026-03-29 — v9.5.0 — Authentication overhaul (Supabase Email/Password), On-device Client ID migration (.env), Heartbeat optimization (3s update frequency), Settings UI branding.*
 *LeoBook Engineering Team — Materialless LLC*

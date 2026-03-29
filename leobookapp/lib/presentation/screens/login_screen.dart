@@ -11,6 +11,7 @@ import 'package:leobookapp/core/constants/app_colors.dart';
 import 'package:leobookapp/logic/cubit/user_cubit.dart';
 import 'package:leobookapp/presentation/screens/main_screen.dart';
 import 'package:leobookapp/presentation/screens/phone_otp_screen.dart';
+import 'package:leobookapp/presentation/screens/email_auth_screen.dart';
 
 class LoginScreen extends StatelessWidget {
   const LoginScreen({super.key});
@@ -170,6 +171,19 @@ class LoginScreen extends StatelessWidget {
                       );
                     },
                   ),
+                  const SizedBox(height: 12),
+                  _AuthButton(
+                    label: 'Continue with Email',
+                    icon: Icons.email_outlined,
+                    isLoading: false,
+                    onTap: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const EmailAuthScreen(),
+                        ),
+                      );
+                    },
+                  ),
                 ],
               );
             },
@@ -310,6 +324,19 @@ class LoginScreen extends StatelessWidget {
                     Navigator.of(context).push(
                       MaterialPageRoute(
                         builder: (_) => const PhoneOtpScreen(),
+                      ),
+                    );
+                  },
+                ),
+                const SizedBox(height: 12),
+                _AuthButton(
+                  label: 'Continue with Email',
+                  icon: Icons.email_outlined,
+                  isLoading: false,
+                  onTap: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const EmailAuthScreen(),
                       ),
                     );
                   },

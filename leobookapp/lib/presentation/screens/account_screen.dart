@@ -434,25 +434,14 @@ class AccountScreen extends StatelessWidget {
         return Center(
           child: Column(
             children: [
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    Icons.auto_graph_rounded,
-                    size: 16,
-                    color: AppColors.textDisabled,
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    'v${UpdateService.appVersion}',
-                    style: GoogleFonts.lexend(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w400,
-                      color: AppColors.textDisabled,
-                      fontFeatures: [const FontFeature.tabularFigures()],
-                    ),
-                  ),
-                ],
+              Text(
+                'LeoBook v${UpdateService.appVersion}',
+                style: GoogleFonts.lexend(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w400,
+                  color: AppColors.textDisabled,
+                  fontFeatures: [const FontFeature.tabularFigures()],
+                ),
               ),
               if (info.updateAvailable) ...[
                 const SizedBox(height: 6),
@@ -487,6 +476,16 @@ class AccountScreen extends StatelessWidget {
                   ),
                 ),
               ],
+              const SizedBox(height: 12),
+              Text(
+                'A Materialless Creation',
+                style: GoogleFonts.lexend(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w400,
+                  color: AppColors.textDisabled,
+                  letterSpacing: 0.5,
+                ),
+              ),
             ],
           ),
         );

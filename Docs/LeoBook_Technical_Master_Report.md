@@ -1,4 +1,4 @@
-> **Version**: 9.4.0 "Stairway Engine" · **Last Updated**: 2026-03-21 · **Architecture**: 3-Phase RL (Poisson Grounding) + 30-dim Action Space + Chapter 1 v9.0 Direct Harvesting + Safety Guardrails v1.0 + **Liquid Glass v3.0 (DM Sans & UI Inspiration Palette)**
+> **Version**: 9.5.0 "Stairway Engine" · **Last Updated**: 2026-03-29 · **Architecture**: 3-Phase RL (Poisson Grounding) + 30-dim Action Space + Chapter 1 v9.0 Direct Harvesting + Safety Guardrails v1.0 + **Liquid Glass v3.0 (DM Sans & UI Inspiration Palette)**
 
 ## Table of Contents
 
@@ -18,7 +18,7 @@
 
 ## 1. System Overview
 
-**LeoBook v9.4 "Stairway Engine"** is an autonomous sports prediction and betting system built by **Materialless LLC** (owner: Emenike Chinenye James). The core thesis: scan 100–500 daily football matches, identify those with genuine predictive edge, and compound returns through a structured, self-protecting staking system — **Project Stairway**.
+**LeoBook v9.5 "Stairway Engine"** is an autonomous sports prediction and betting system built by **Materialless LLC** (owner: Emenike Chinenye James). The core thesis: scan 100–500 daily football matches, identify those with genuine predictive edge, and compound returns through a structured, self-protecting staking system — **Project Stairway**.
 
 | Half                      | Technology                         | Purpose                                                                                                                                  |
 | ------------------------- | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
@@ -455,6 +455,13 @@ These are intellectually honest unknowns. They will be answered by data, not ass
 
 ## 11. Changelog
 
+### v9.5.0 — Authentication & Heartbeat Overhaul (March 29, 2026)
+- **Supabase Email Authentication**: Implemented full email/password sign-up and sign-in flow with toggle UI, matching Liquid Glass aesthetic.
+- **On-Device Auth Migration**: Replaced fragile compile-time `String.fromEnvironment` with runtime `flutter_dotenv` for Google/Phone OAuth client IDs.
+- **Heartbeat Optimization**: Update check frequency increased from 15s to **3s** ("LeoBook breathes every 3 seconds").
+- **UI Branding**: Version footer replaced generic icons with "LeoBook v9.5.0" and added "A Materialless Creation" branding.
+- **Environment Parity**: Ensured all frontend/backend version constants match across all file layers.
+
 ### v9.4.0 — Design Overhaul & Filter System (March 21, 2026)
 - **Design System Migration**: Switched from Lexend/Inter to **DM Sans** typography.
 - **Color Palette**: Replaced original tokens with the **UI Inspiration (Night)** palette (Globe #1C1B20, Island #24232A, Primary #775CDF).
@@ -498,5 +505,5 @@ These are intellectually honest unknowns. They will be answered by data, not ass
 - **Time-Based Cooldowns**: Replaced permanent key exhaustion with 65-second auto-recovery in `llm_health_manager.py`.
 - **Exponential Backoff**: `min(2^n, 30)` second delays on consecutive 429s in `build_search_dict.py` and `api_manager.py`.
 
-*Last updated: March 21, 2026 (v9.4.0 — Design Overhaul & Filter System)*
+*Last updated: March 29, 2026 (v9.5.0 — Authentication & Heartbeat Overhaul)*
 *LeoBook Engineering Team — Materialless LLC*

@@ -10,6 +10,7 @@ import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show AuthState, AuthChangeEvent;
 import '../../data/models/user_model.dart';
 import '../../data/repositories/auth_repository.dart';
+import '../../data/services/twilio_service.dart';
 
 part 'user_state.dart';
 
@@ -28,12 +29,15 @@ class UserCubit extends Cubit<UserState> {
   void _listenToAuthChanges() {
     _authSub = _authRepo.authStateChanges.listen((authState) {
       final event = authState.event;
-      if (event == AuthChangeEvent.signedIn ||
-          event == AuthChangeEvent.tokenRefreshed) {
+      if (event == AuthChangeEvent.signedIn) {
         final user = _authRepo.currentUser;
         if (user != null) {
           final model = UserModel.fromSupabaseUser(user);
-          emit(UserAuthenticated(user: model));
+          if (model.isProfileComplete) {
+            emit(UserAuthenticated(user: model));
+          } else {
+            emit(UserProfileIncomplete(user: model));
+          }
         }
       } else if (event == AuthChangeEvent.signedOut) {
         emit(const UserInitial(user: UserModel(id: 'guest')));
@@ -45,7 +49,19 @@ class UserCubit extends Cubit<UserState> {
   void _restoreSession() {
     final user = _authRepo.currentUser;
     if (user != null) {
-      emit(UserAuthenticated(user: UserModel.fromSupabaseUser(user)));
+      final model = UserModel.fromSupabaseUser(user);
+      if (model.isProfileComplete) {
+        emit(UserAuthenticated(user: model));
+      } else {
+        emit(UserProfileIncomplete(user: model));
+      }
+    }
+  }
+
+  void _sendLoginNotification(String? phone) {
+    if (phone != null && phone.isNotEmpty) {
+      // In a background unawaited future
+      TwilioService.sendDeviceLoginNotification(phone);
     }
   }
 
@@ -136,9 +152,13 @@ class UserCubit extends Cubit<UserState> {
     try {
       final response = await _authRepo.signInWithEmail(email, password);
       if (response.user != null) {
-        emit(UserAuthenticated(
-          user: UserModel.fromSupabaseUser(response.user!),
-        ));
+        final model = UserModel.fromSupabaseUser(response.user!);
+        if (model.isProfileComplete) {
+          _sendLoginNotification(model.phone);
+          emit(UserAuthenticated(user: model));
+        } else {
+          emit(UserProfileIncomplete(user: model));
+        }
       } else {
         emit(UserError(user: state.user, message: 'Email sign-in failed.'));
       }
@@ -156,9 +176,19 @@ class UserCubit extends Cubit<UserState> {
     emit(const UserInitial(user: UserModel(id: 'guest')));
   }
 
-  // ─── Super LeoBook (UI-level subscription toggle) ────────────────
+  // ─── Super LeoBook (Subscription toggle with persistence) ───────
 
   void upgradeToSuperLeoBook() {
+    final activatedAt = DateTime.now().toIso8601String();
+    
+    // Save to Supabase metadata in background so it persists across sessions
+    _authRepo.updateUserMetadata({
+      'super_leobook_activated_at': activatedAt,
+    }).catchError((e) {
+      debugPrint('[UserCubit] Failed to persist Super LeoBook activation: $e');
+      throw e;
+    });
+
     final upgraded = state.user.copyWith(
       isSuperLeoBook: true,
       tier: UserTier.pro,
@@ -167,6 +197,14 @@ class UserCubit extends Cubit<UserState> {
   }
 
   void cancelSuperLeoBook() {
+    // Clear from Supabase metadata
+    _authRepo.updateUserMetadata({
+      'super_leobook_activated_at': null,
+    }).catchError((e) {
+      debugPrint('[UserCubit] Failed to clear Super LeoBook activation: $e');
+      throw e;
+    });
+
     final downgraded = state.user.copyWith(
       isSuperLeoBook: false,
       tier: UserTier.lite,

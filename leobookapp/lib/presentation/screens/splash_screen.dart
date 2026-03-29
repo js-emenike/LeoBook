@@ -11,6 +11,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:leobookapp/core/constants/app_colors.dart';
 import 'package:leobookapp/presentation/screens/login_screen.dart';
 import 'package:leobookapp/presentation/screens/main_screen.dart';
+import 'package:leobookapp/presentation/screens/profile_setup_screen.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -45,8 +46,16 @@ class _SplashScreenState extends State<SplashScreen>
       if (!mounted) return;
 
       final user = Supabase.instance.client.auth.currentUser;
-      final destination =
-          user != null ? const MainScreen() : const LoginScreen();
+      Widget destination = const LoginScreen();
+
+      if (user != null) {
+        final meta = user.userMetadata ?? {};
+        final isProfileComplete = meta['profile_completed'] == true;
+        
+        destination = isProfileComplete 
+            ? const MainScreen() 
+            : const ProfileSetupScreen();
+      }
 
       Navigator.of(context).pushReplacement(
         PageRouteBuilder(

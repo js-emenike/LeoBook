@@ -8,6 +8,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:leobookapp/core/constants/app_colors.dart';
 import 'package:leobookapp/logic/cubit/user_cubit.dart';
+import 'package:leobookapp/presentation/screens/login_screen.dart';
 
 class SuperLeoBookScreen extends StatelessWidget {
   const SuperLeoBookScreen({super.key});
@@ -93,7 +94,7 @@ class SuperLeoBookScreen extends StatelessWidget {
                               ),
                             ),
                             const TextSpan(
-                              text: ' for 12 Days',
+                              text: ' for 15 Days',
                               style: TextStyle(color: AppColors.textTertiary),
                             ),
                           ],
@@ -257,9 +258,37 @@ class SuperLeoBookScreen extends StatelessWidget {
           BlocBuilder<UserCubit, UserState>(
             builder: (context, state) {
               final isSuperUser = state.user.isSuperLeoBook;
+              final isGuest = state.user.isGuest;
               return GestureDetector(
                 onTap: () {
-                  if (isSuperUser) {
+                  if (isGuest) {
+                    // Guest must sign in first
+                    Navigator.of(context).pop();
+                    final isDesktop = MediaQuery.of(context).size.width > 1024;
+                    if (isDesktop) {
+                      showDialog(
+                        context: context,
+                        barrierDismissible: true,
+                        barrierColor: Colors.black87,
+                        builder: (_) => BlocProvider.value(
+                          value: context.read<UserCubit>(),
+                          child: const LoginScreen(),
+                        ),
+                      );
+                    } else {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => const LoginScreen()),
+                      );
+                    }
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          'Sign in to start your free trial',
+                          style: GoogleFonts.lexend(),
+                        ),
+                      ),
+                    );
+                  } else if (isSuperUser) {
                     context.read<UserCubit>().cancelSuperLeoBook();
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
@@ -283,7 +312,7 @@ class SuperLeoBookScreen extends StatelessWidget {
                   ),
                   child: Center(
                     child: Text(
-                      isSuperUser ? 'Cancel Subscription' : 'Start 12-day free trial',
+                      isSuperUser ? 'Cancel Subscription' : 'Start 15-day free trial',
                       style: GoogleFonts.lexend(
                         fontSize: 15,
                         fontWeight: FontWeight.w700,

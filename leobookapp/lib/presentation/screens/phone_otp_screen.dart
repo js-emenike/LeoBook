@@ -11,6 +11,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:leobookapp/core/constants/app_colors.dart';
 import 'package:leobookapp/logic/cubit/user_cubit.dart';
 import 'package:leobookapp/presentation/screens/main_screen.dart';
+import 'package:leobookapp/presentation/screens/profile_setup_screen.dart';
 
 class PhoneOtpScreen extends StatefulWidget {
   const PhoneOtpScreen({super.key});
@@ -76,8 +77,17 @@ class _PhoneOtpScreenState extends State<PhoneOtpScreen> {
       listener: (context, state) {
         if (state is UserAuthenticated) {
           _navigateToMain();
-        }
-        if (state is UserError) {
+        } else if (state is UserProfileIncomplete) {
+          Navigator.of(context).pushAndRemoveUntil(
+            PageRouteBuilder(
+              pageBuilder: (_, __, ___) => const ProfileSetupScreen(),
+              transitionsBuilder: (_, anim, __, child) =>
+                  FadeTransition(opacity: anim, child: child),
+              transitionDuration: const Duration(milliseconds: 400),
+            ),
+            (_) => false,
+          );
+        } else if (state is UserError) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text(state.message),

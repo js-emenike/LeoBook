@@ -36,3 +36,8 @@ class UserError extends UserState {
   @override
   List<Object?> get props => [user, message];
 }
+
+/// Profile incomplete (missing username, password, or verified phone)
+class UserProfileIncomplete extends UserState {
+  const UserProfileIncomplete({required super.user});
+}

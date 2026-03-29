@@ -12,6 +12,7 @@ import 'package:leobookapp/logic/cubit/user_cubit.dart';
 import 'package:leobookapp/presentation/screens/main_screen.dart';
 import 'package:leobookapp/presentation/screens/phone_otp_screen.dart';
 import 'package:leobookapp/presentation/screens/email_auth_screen.dart';
+import 'package:leobookapp/presentation/screens/profile_setup_screen.dart';
 
 class LoginScreen extends StatelessWidget {
   const LoginScreen({super.key});
@@ -33,8 +34,11 @@ class LoginScreen extends StatelessWidget {
       listener: (context, state) {
         if (state is UserAuthenticated) {
           _navigateToMain(context);
-        }
-        if (state is UserError) {
+        } else if (state is UserProfileIncomplete) {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(builder: (_) => const ProfileSetupScreen()),
+          );
+        } else if (state is UserError) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text(state.message),

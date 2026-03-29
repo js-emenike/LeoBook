@@ -163,5 +163,18 @@ class AuthRepository {
       }
     }
   }
+  // ─── Update User Metadata ────────────────────────────────────────
+
+  /// Update user metadata (e.g. Super LeoBook activation, profile data).
+  Future<UserResponse> updateUserMetadata(Map<String, dynamic> data) async {
+    try {
+      return await _supabase.auth.updateUser(
+        UserAttributes(data: data),
+      );
+    } catch (e) {
+      debugPrint('[AuthRepository] Update metadata error: $e');
+      rethrow;
+    }
+  }
 }
 

@@ -15,6 +15,7 @@ class UserModel {
   final UserTier tier;
   final bool isEmailVerified;
   final bool isSuperLeoBook; // UI-level subscription flag
+  final bool isProfileComplete;
 
   const UserModel({
     required this.id,
@@ -24,6 +25,7 @@ class UserModel {
     this.tier = UserTier.unregistered,
     this.isEmailVerified = false,
     this.isSuperLeoBook = false,
+    this.isProfileComplete = false,
   });
 
   // ─── Access Control ──────────────────────────────────────────────
@@ -67,20 +69,46 @@ class UserModel {
   /// Map a Supabase [User] to [UserModel].
   factory UserModel.fromSupabaseUser(User user) {
     final meta = user.userMetadata ?? {};
+    
+    // Check Super LeoBook 15-day trial status
+    bool isSuperLeoBook = false;
+    UserTier currentTier = UserTier.lite; // Default for authenticated users
+    
+    if (meta['super_leobook_activated_at'] != null) {
+      final activatedStr = meta['super_leobook_activated_at'].toString();
+      final activatedDate = DateTime.tryParse(activatedStr);
+      if (activatedDate != null) {
+        final daysSinceActivation = DateTime.now().difference(activatedDate).inDays;
+        if (daysSinceActivation <= 15) {
+          isSuperLeoBook = true;
+          currentTier = UserTier.pro;
+        }
+      }
+    }
+
+    final isProfileComplete = meta['profile_completed'] == true;
+
     return UserModel(
       id: user.id,
       email: user.email,
       phone: user.phone,
       displayName: meta['full_name'] as String? ??
           meta['name'] as String? ??
+          meta['username'] as String? ??
           user.email?.split('@').first,
-      tier: UserTier.lite, // Default tier for authenticated users
+      tier: currentTier,
       isEmailVerified: user.emailConfirmedAt != null,
+      isSuperLeoBook: isSuperLeoBook,
+      isProfileComplete: isProfileComplete,
     );
   }
 
-  /// Return a copy with Super LeoBook subscription toggled.
-  UserModel copyWith({bool? isSuperLeoBook, UserTier? tier}) {
+  /// Return a copy with modified fields.
+  UserModel copyWith({
+    bool? isSuperLeoBook, 
+    UserTier? tier,
+    bool? isProfileComplete,
+  }) {
     return UserModel(
       id: id,
       email: email,
@@ -89,6 +117,7 @@ class UserModel {
       tier: tier ?? this.tier,
       isEmailVerified: isEmailVerified,
       isSuperLeoBook: isSuperLeoBook ?? this.isSuperLeoBook,
+      isProfileComplete: isProfileComplete ?? this.isProfileComplete,
     );
   }
 }

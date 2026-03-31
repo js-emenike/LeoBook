@@ -73,18 +73,21 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
     
     setState(() => _isLoading = true);
     try {
+      String channelName = 'WhatsApp';
       if (widget.isPhoneChange) {
         // For phone changes, use updatePhone again
         await _authRepo.updatePhone(widget.phone);
+        channelName = 'SMS'; // Supabase updatePhone typically uses SMS
       } else {
         // Logic: WhatsApp first, then SMS fallback after 30s
         final channel = _isSmsFallback ? OtpChannel.sms : OtpChannel.whatsapp;
         await _authRepo.sendOtp(widget.phone, channel: channel);
+        channelName = channel == OtpChannel.sms ? 'SMS' : 'WhatsApp';
       }
       
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('OTP resent via ${channel == OtpChannel.sms ? 'SMS' : 'WhatsApp'}.')),
+        SnackBar(content: Text('OTP resent via $channelName.')),
       );
       _startResendTimer(); // Restart the timer
     } catch (e) {

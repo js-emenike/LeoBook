@@ -42,6 +42,7 @@ SUPABASE_SCHEMA = {
             recommendation_score REAL, h2h_fixture_ids JSONB, form_fixture_ids JSONB,
             standings_snapshot JSONB, league_stage TEXT, generated_at TEXT,
             home_score TEXT, away_score TEXT,
+            form_home TEXT, form_away TEXT, h2h_summary TEXT,
             is_available BOOLEAN DEFAULT FALSE,
             last_updated TIMESTAMPTZ DEFAULT now()
         );""",

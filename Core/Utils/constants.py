@@ -36,5 +36,5 @@ FB_MOBILE_VIEWPORT = {'width': 375, 'height': 612}
 # ── LeoBook Version ──────────────────────────────────────────────────────────
 # Increment both on every release. Referenced by lifecycle.py session header
 # and any other version-stamped output. Do NOT hardcode elsewhere.
-LEOBOOK_VERSION = "9.5.0"
+LEOBOOK_VERSION = "9.5.7"
 LEOBOOK_CODENAME = "Stairway Engine"

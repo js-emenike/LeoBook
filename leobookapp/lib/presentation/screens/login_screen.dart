@@ -14,6 +14,7 @@ import 'package:leobookapp/presentation/screens/email_auth_screen.dart';
 import 'package:leobookapp/presentation/screens/profile_setup_screen.dart';
 import 'package:leobookapp/presentation/screens/otp_verification_screen.dart';
 import 'package:leobookapp/presentation/screens/password_entry_screen.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
 class LoginScreen extends StatelessWidget {
   const LoginScreen({super.key});
@@ -336,7 +337,11 @@ class LoginScreen extends StatelessWidget {
                 children: [
                   _AuthButton(
                     label: 'Continue with Google',
-                    icon: Icons.g_mobiledata_rounded,
+                    customIcon: SvgPicture.asset(
+                      'assets/icons/google_g.svg',
+                      width: 22,
+                      height: 22,
+                    ),
                     isLoading: isLoading,
                     onTap: () =>
                         context.read<UserCubit>().signInWithGoogle(),
@@ -481,7 +486,11 @@ class LoginScreen extends StatelessWidget {
               children: [
                 _AuthButton(
                   label: 'Continue with Google',
-                  icon: Icons.g_mobiledata_rounded,
+                  customIcon: SvgPicture.asset(
+                    'assets/icons/google_g.svg',
+                    width: 22,
+                    height: 22,
+                  ),
                   isLoading: isLoading,
                   onTap: () =>
                       context.read<UserCubit>().signInWithGoogle(),
@@ -561,13 +570,15 @@ class LoginScreen extends StatelessWidget {
 
 class _AuthButton extends StatelessWidget {
   final String label;
-  final IconData icon;
+  final IconData? icon;
+  final Widget? customIcon;
   final bool isLoading;
   final VoidCallback onTap;
 
   const _AuthButton({
     required this.label,
-    required this.icon,
+    this.icon,
+    this.customIcon,
     required this.isLoading,
     required this.onTap,
   });
@@ -598,6 +609,8 @@ class _AuthButton extends StatelessWidget {
                   color: Colors.white54,
                 ),
               )
+            else if (customIcon != null)
+              customIcon!
             else
               Icon(icon, color: Colors.white, size: 22),
             const SizedBox(width: 10),

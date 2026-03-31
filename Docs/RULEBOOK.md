@@ -1,4 +1,4 @@
-# LeoBook Developer RuleBook v9.5.6
+# LeoBook Developer RuleBook v9.5.7
 
 > **This document is LAW.** Every developer and AI agent working on LeoBook MUST follow these rules without exception. Violations will break the system.
 
@@ -51,7 +51,7 @@ Leo.py operates via three sequential gates to ensure data integrity:
     - **History Job**: Schedules >= 10 matches per team (seasonal rolling).
     - **Live Job**: Real-time score validation (v9.5).
 
-### 2.4 Strict Data Contract (v9.5.6)
+### 2.4 Strict Data Contract (v9.5.7)
 - **All-or-Nothing Transactions**: Standardized in `Modules/Flashscore/data_contract.py`. Every worker MUST validate the full match payload before database ingress. Partial data is dropped.
 - **Rich Rationale Serialization**: Intelligence outputs MUST include the reasoning chain (Form, H2H, Standings) as structured JSON in the `intelligence_context` column. Single-string reasoning is deprecated.
     - **Job A (gate — blocks pipeline)**: 0 critical gaps AND 0 completed season mismatches. CUP_FORMAT competitions (< 4 registered teams) are EXCLUDED from this logic and from COMPLETED classification.
@@ -417,6 +417,6 @@ All six Tier 1 guardrails are **LIVE as of March 10, 2026**. None may be disable
 
 ---
 
-*Last updated: 2026-03-29 (v9.5.0 — Authentication overhaul, increased heartbeat, Settings UI improvements)*
-*Previous: v9.4 — Design system migration, recommendation filters, live countdown*
+*Last updated: 2026-03-31 (v9.5.7 — Chapter 1 Hardening: data_contract.py refactor, rich rationale JSONB, MatchRationaleSheet UI)*
+*Previous: v9.5.0 — Authentication overhaul, increased heartbeat, Settings UI improvements*
 *Authored by: LeoBook Engineering Team — Materialless LLC*

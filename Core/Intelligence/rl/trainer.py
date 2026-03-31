@@ -96,6 +96,8 @@ def _build_fixture_context(
     home_tid: str,
     away_tid: str,
     country_league: str,
+    league_id: str,
+    season: str,
     f_date: str,
     h_score,
     a_score,
@@ -138,17 +140,19 @@ def _build_fixture_context(
         (home_tid, away_tid, away_tid, home_tid)
     ).fetchall()
 
-    # 3. Standings snapshot (cached per country_league) ───────────────────
+    # 3. Standings snapshot (cached per country_league + date) ───────────
     global _standings_cache
-    if country_league not in _standings_cache:
-        rows = conn.execute(
-            """SELECT team_name, position, played, wins, draws, losses,
-                      goal_difference, points
-               FROM standings WHERE country_league=? ORDER BY position ASC LIMIT 20""",
-            (country_league,)
-        ).fetchall()
-        _standings_cache[country_league] = [dict(r) for r in rows]
-    standings = _standings_cache[country_league]
+    cache_key = (country_league, f_date)
+    if cache_key not in _standings_cache:
+        from Data.Access.league_db import computed_standings
+        try:
+            rows = computed_standings(
+                conn=conn, league_id=league_id, season=season, before_date=f_date
+            )
+            _standings_cache[cache_key] = [dict(r) for r in rows]
+        except Exception:
+            _standings_cache[cache_key] = []
+    standings = _standings_cache[cache_key]
 
     # 4. xG proxy: avg goals scored in last 10 per team ───────────────────
     def _avg_scored(form_rows, team_id):
@@ -965,7 +969,9 @@ class RLTrainer(TrainerPhasesMixin, TrainerIOMixin):
 
                     # ── Build enrichment context (form, H2H, standings, xG) ──
                     _ctx = _build_fixture_context(
-                        conn, home_tid, away_tid, country_league_val, f_date or match_date,
+                        conn, home_tid, away_tid, country_league_val,
+                        league_id, season,
+                        f_date or match_date,
                         h_score, a_score
                     )
 

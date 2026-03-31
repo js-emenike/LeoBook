@@ -36,7 +36,16 @@ _MATCH_ALWAYS_REQUIRED = [
     "home_team_url",
     "away_team_url",
     "home_crest_url",
-    "awayclass DataContract:
+    "away_crest_url",
+]
+
+_MATCH_RESULTS_ONLY = [
+    "home_score",
+    "away_score",
+    "winner",
+]
+
+class DataContract:
     """Strict data contract validation for Flashscore enrichment."""
     
     @staticmethod
@@ -134,20 +143,3 @@ _MATCH_ALWAYS_REQUIRED = [
             return (False, summary)
 
         return (True, f"[{tab.upper()}] {extracted_count} matches — contract OK")
- validation
-    all_violations = []
-    for match in matches:
-        passed, violations = validate_match(match, tab)
-        if not passed:
-            all_violations.extend(violations)
-
-    if all_violations:
-        summary = (
-            f"[{tab.upper()}] {len(all_violations)} contract violation(s) in {extracted_count} matches:\n"
-            + "\n".join(f"    • {v}" for v in all_violations[:20])
-        )
-        if len(all_violations) > 20:
-            summary += f"\n    ... and {len(all_violations) - 20} more"
-        return (False, summary)
-
-    return (True, f"[{tab.upper()}] {extracted_count} matches — contract OK")
